@@ -1,0 +1,14 @@
+
+crew:
+  name: MarketInsightsCrew
+  description: >
+    Pipeline: research → analyse → executive summary.
+  process: sequential  # or 'parallel' (we’ll map to Process.sequential/parallel)
+  agents:
+    - Market Researcher
+    - Market Analyst
+    - Executive Summarizer
+  order:
+    - Research Task
+    - Analysis Task
+    - Executive Summary Task

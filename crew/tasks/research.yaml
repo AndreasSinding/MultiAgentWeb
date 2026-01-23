@@ -1,0 +1,11 @@
+
+task:
+  name: Research Task
+  description: >
+    Gjør nett-research på {topic}.
+    Finn minst tre dagsaktuelle trender, 3–5 konkurrenter/aktører og 5–8 solide kilder.
+    Vær spesifikk og presis; prioriter ferske artikler/rapporter.
+  agent: Market Researcher
+  expected_output: >
+    Strukturert research med trender, aktører, tall og kilder.
+  output_schema: ResearchOutput
