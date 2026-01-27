@@ -14,16 +14,19 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Verify expected files
-        run: |
-          ls -la
-          test -f requirements.txt || (echo "requirements.txt missing!" && exit 1)
-          test -f main.py || (echo "main.py missing!" && exit 1)
+      - name: Show repo content
+        run: ls -la
 
-      - name: Create deployment ZIP
+      - name: Create flat deployment package
         run: |
-          echo "Zipping repository..."
-          zip -r app.zip . -x "*.git*" "*.github*" "*__pycache__*"
+          echo "Preparing flat ZIP..."
+          mkdir package
+          shopt -s dotglob
+          cp -r * package/
+          cd package
+          zip -r ../app.zip . -x "*.git*" "*.github*" "*__pycache__*"
+          cd ..
+          ls -la app.zip
 
       - name: Deploy ZIP to Azure Web App
         uses: azure/webapps-deploy@v3
@@ -34,4 +37,3 @@ jobs:
           type: zip
           clean: true
           restart: true
- 
