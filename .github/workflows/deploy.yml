@@ -16,31 +16,31 @@ jobs:
 
       - name: Show repo content
         run: ls -la
-
       
-- name: Create flat deployment ZIP
-  run: |
-    echo "Preparing flat ZIP..."
-
-    # Clean any old artifacts
-    rm -rf package app.zip
-
-    mkdir package
-
-    # Copy everything EXCEPT the package directory itself and GitHub internals
-    shopt -s dotglob
-    for item in *; do
-      if [ "$item" != "package" ] && [ "$item" != ".git" ] && [ "$item" != ".github" ]; then
-        cp -r "$item" package/
-      fi
-    done
-
-    cd package
-    zip -r ../app.zip .
-    cd ..
-
-    echo "ZIP created:"
-    ls -lh app.zip
+            
+      - name: Create flat deployment ZIP
+        run: |
+          echo "Preparing flat ZIP..."
+      
+          # Clean any old artifacts
+          rm -rf package app.zip
+      
+          mkdir package
+      
+          # Copy everything EXCEPT the package directory itself and GitHub internals
+          shopt -s dotglob
+          for item in *; do
+            if [ "$item" != "package" ] && [ "$item" != ".git" ] && [ "$item" != ".github" ]; then
+              cp -r "$item" package/
+            fi
+          done
+      
+          cd package
+          zip -r ../app.zip .
+          cd ..
+      
+          echo "ZIP created:"
+          ls -lh app.zip
 
 
       - name: Deploy ZIP to Azure Web App
