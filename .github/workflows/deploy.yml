@@ -16,17 +16,21 @@ jobs:
 
       - name: Verify expected files
         run: |
-          echo "Listing repo content:"
           ls -la
-          test -f requirements.txt || (echo "requirements.txt missing at repo root" && exit 1)
-          test -f main.py || (echo "main.py missing at repo root" && exit 1)
+          test -f requirements.txt || (echo "requirements.txt missing!" && exit 1)
+          test -f main.py || (echo "main.py missing!" && exit 1)
 
-      - name: Deploy to Azure Web App (extract mode)
+      - name: Create deployment ZIP
+        run: |
+          echo "Zipping repository..."
+          zip -r app.zip . -x "*.git*" "*.github*" "*__pycache__*"
+
+      - name: Deploy ZIP to Azure Web App
         uses: azure/webapps-deploy@v3
         with:
           app-name: multiagentcrew
           publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
-          package: .
+          package: app.zip
           type: zip
           clean: true
           restart: true
