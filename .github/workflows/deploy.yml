@@ -24,7 +24,7 @@ jobs:
       - name: Deploy to Azure Web App (extract mode)
         uses: azure/webapps-deploy@v3
         with:
-          app-name: multiagentcrew-ebazexd2e0h7e4fh
+          app-name: multiagentcrew
           publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
           package: .
           type: zip
