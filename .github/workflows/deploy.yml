@@ -1,35 +1,44 @@
 
-name: Deploy FastAPI to Azure App Service
+name: Deploy FastAPI to Azure App Service (Zip Deploy with extraction)
 
 on:
   push:
-    branches:
-      - main
+    branches: [ "main" ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  AZURE_WEBAPP_NAME: multiagentcrew-ebazexd2e0h7e4fh   # <-- your Web App name
 
 jobs:
-  build-and-deploy:
+  deploy:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.11'
+      # Optional: sanity check to be sure the expected files are at repo root
+      - name: Verify expected files
+        run: |
+          echo "Repo root content:"
+          ls -la
+          test -f requirements.txt || (echo "requirements.txt not found at repo root" && exit 1)
+          test -f main.py || (echo "main.py not found at repo root" && exit 1)
 
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
-
-    - name: Zip application
-      run: zip -r app.zip .
-
-    - name: Deploy to Azure Web App
-      uses: azure/webapps-deploy@v3
-      with:
-        app-name: multiagentcrew-ebazexd2e0h7e4fh
-        publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
-        package: app.zip
+      # IMPORTANT: Use Zip Deploy with 'package: .' and 'type: zip'
+      # This pushes the repo as a ZIP and the platform extracts it.
+      # With SCM_DO_BUILD_DURING_DEPLOYMENT=1 set in the portal,
+      # Oryx will build and publish to /home/site/wwwroot (no Run-From-Package).
+      - name: Deploy to Azure Web App (extract mode)
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: ${{ env.AZURE_WEBAPP_NAME }}
+          publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
+          package: .
+          type: zip
+          # These two help clear stale locks and restart cleanly
+          clean: true
+          restart: true
