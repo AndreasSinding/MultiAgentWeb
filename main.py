@@ -1,7 +1,16 @@
 
 # main.py  
 # --- HOT-SWAP SQLITE FOR CHROMA ---
+import os
+import json
+import warnings
 import sys
+from functools import lru_cache
+from typing import Tuple, Dict, Any
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+from dotenv import load_dotenv
+
 try:
     import pysqlite3 as sqlite3  # loads bundled SQLite >= 3.35
     sys.modules['sqlite3'] = sqlite3
@@ -9,34 +18,56 @@ try:
 except Exception as e:
     print("WARNING: sqlite3 hot-swap failed:", e)
 # -----------------------------------
-import os
-import json
-import warnings
-from functools import lru_cache
-from typing import Tuple, Dict, Any
-
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
-from dotenv import load_dotenv
-
-# Silence only this specific Pydantic V2 migration warning from CrewAI internals
-warnings.filterwarnings(
-    "ignore",
-    message="Valid config keys have changed in V2",
-    category=UserWarning,
-    module="pydantic._internal._config",
-)
-
-# Load environment variables (.env locally; overridden by Azure App Settings in production)
-load_dotenv(override=True)
 
 # FastAPI app (ASGI variable must be named `app`)
 app = FastAPI(title="Market Insights – Multi-Agent Crew API")
 
+# Silence only this specific Pydantic V2 migration warning from CrewAI internals
+#warnings.filterwarnings(
+ #   "ignore",
+  #  message="Valid config keys have changed in V2",
+   # category=UserWarning,
+    #module="pydantic._internal._config",
+#)
+
+
+# Load environment variables (.env locally; overridden by Azure App Settings in production)
+load_dotenv(override=True)
+
 BASE = os.path.dirname(__file__)
 
 # Import your loaders
-from app.loader import load_llm, load_tools, load_agents, load_tasks, load_crew  # noqa: E402
+# from app.loader import load_llm, load_tools, load_agents, load_tasks, load_crew  # noqa: E402
+
+# 2) Lettvekts health-endpoint (svarer alltid raskt)
+@app.get("/healthz")
+def healthz():
+    return {"ok": True}
+
+# 3) Lazy-init: importer tunge ting først når vi trenger dem
+@lru_cache(maxsize=1)
+def get_crew_bootstrap():
+    """
+    Importerer og initialiserer først når den faktisk kalles.
+    Gjør app-oppstart (og SSH) rask og stabil.
+    """
+    # Flytt alle tunge imports hit
+    from app.loader import (
+        load_llm, load_tools, load_agents, load_tasks, load_crew
+    )
+
+    llm = load_llm()
+    tools = load_tools()
+    agents = load_agents(llm, tools)
+    tasks = load_tasks()
+    crew = load_crew(agents, tasks)
+    return {
+        "llm": llm,
+        "tools": tools,
+        "agents": agents,
+        "tasks": tasks,
+        "crew": crew
+    }
 
 
 # ---------- Helpers ----------
@@ -50,18 +81,18 @@ def ensure_keys():
         )
 
 
-@lru_cache(maxsize=1)
-def get_components() -> Tuple[Any, Dict[str, Any], Dict[str, Any], Dict[str, Any], Any]:
+#@lru_cache(maxsize=1)
+#def get_components() -> Tuple[Any, Dict[str, Any], Dict[str, Any], Dict[str, Any], Any]:
     """
     Load and cache llm, tools, agents, tasks, and crew.
     Cache is per-process (reused across requests until container restarts).
     """
-    llm = load_llm(os.path.join(BASE, "config/llm.yaml"))
-    tools = load_tools(os.path.join(BASE, "crew/tools"))
-    agents = load_agents(os.path.join(BASE, "crew/agents"), llm, tools)
-    tasks = load_tasks(os.path.join(BASE, "crew/tasks"), agents)
-    crew = load_crew(os.path.join(BASE, "crew/crews/market_insights.yaml"), agents, tasks)
-    return llm, tools, agents, tasks, crew
+ #   llm = load_llm(os.path.join(BASE, "config/llm.yaml"))
+  #  tools = load_tools(os.path.join(BASE, "crew/tools"))
+   # agents = load_agents(os.path.join(BASE, "crew/agents"), llm, tools)
+    #tasks = load_tasks(os.path.join(BASE, "crew/tasks"), agents)
+    #crew = load_crew(os.path.join(BASE, "crew/crews/market_insights.yaml"), agents, tasks)
+    #return llm, tools, agents, tasks, crew
 
 
 def run_crew_pipeline(topic: str) -> dict:
