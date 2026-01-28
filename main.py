@@ -22,6 +22,11 @@ except Exception as e:
 # FastAPI app (ASGI variable must be named `app`)
 app = FastAPI(title="Market Insights – Multi-Agent Crew API")
 
+
+@app.get("/healthz")
+def healthz():
+    return {"ok": True}
+
 # Silence only this specific Pydantic V2 migration warning from CrewAI internals
 #warnings.filterwarnings(
  #   "ignore",
@@ -138,6 +143,11 @@ def root():
         "endpoints": ["/run (POST)", "/latest (GET)"]
     }
 
+
+app.get("/status")
+def status():
+    state = get_crew_bootstrap()
+    return {"crew_ready": state["crew"] is not None}
 
 @app.post("/run")
 def run(req: RunRequest):
