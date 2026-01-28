@@ -78,6 +78,7 @@ def get_crew_bootstrap():
 
 # Ny, enkel root-status for drift/monitorering
 @app.get("/status")
+@app.get("/status/")
 def system_status():
     state = get_crew_bootstrap()
     return {"crew_ready": state["crew"] is not None}
