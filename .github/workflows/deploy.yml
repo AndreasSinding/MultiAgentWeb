@@ -1,9 +1,8 @@
-name: Deploy FastAPI to Azure Web App (extract mode)
+name: Deploy FastAPI to Azure Web App (Publish Profile + Oryx build)
 
 on:
   push:
-    branches:
-      - main
+    branches: [ main ]
   workflow_dispatch:
 
 jobs:
@@ -11,34 +10,29 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Show repo content
+      - name: Show repo (optional)
         run: ls -la
-      
-            
-      - name: Create flat deployment ZIP
-        run: |
-          echo "Preparing flat ZIP..."
-          rm -rf package app.zip
-          mkdir package
-          shopt -s dotglob
-          for item in *; do
-            if [ "$item" != "package" ] && [ "$item" != ".git" ] && [ "$item" != ".github" ]; then
-              cp -r "$item" package/
-            fi
-          done
-          (cd package && zip -r ../app.zip .)
-          ls -lh app.zip
 
-
-      - name: Deploy ZIP to Azure Web App
+      - name: Deploy (ZIP deploy)
         uses: azure/webapps-deploy@v3
         with:
-          app-name: multiagentcrew
+          app-name: <your-webapp-name>
           publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
-          package: app.zip
-          type: zip
+          package: .
           clean: true
           restart: true
+
+      # Ensure Oryx build runs on ZIP deploy:
+      - name: Enable Oryx build on Azure (once is enough)
+        run: |
+          az webapp config appsettings set \
+            --name <your-webapp-name> \
+            --resource-group <rg> \
+            --settings SCM_DO_BUILD_DURING_DEPLOYMENT=true
+          az webapp config appsettings delete \
+            --name <your-webapp-name> \
+            --resource-group <rg> \
+            --setting-names WEBSITE_RUN_FROM_PACKAGE
