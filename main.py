@@ -27,6 +27,54 @@ app = FastAPI(title="Market Insights – Multi-Agent Crew API")
 def healthz():
     return {"ok": True}
 
+
+# --- Konfig: YAML-stier (leses fra App Settings; har defaults) ---
+LLM_YAML_PATH    = os.getenv("LLM_YAML_PATH",    "app/config/llm.yaml")
+TOOLS_YAML_PATH  = os.getenv("TOOLS_YAML_PATH",  "app/config/tools.yaml")
+AGENTS_YAML_PATH = os.getenv("AGENTS_YAML_PATH", "app/config/agents.yaml")
+TASKS_YAML_PATH  = os.getenv("TASKS_YAML_PATH",  "app/config/tasks.yaml")
+
+
+# --- Global state for readiness og feilmelding ---
+CREW_STATE: Dict[str, Any] = {"ready": False, "error": None, "crew": None}
+
+def _call_maybe_with_path(func, path):
+    """Kall med sti hvis signaturen krever det; ellers uten."""
+    try:
+        return func(path)
+    except TypeError:
+        return func()
+
+def init_crew() -> Dict[str, Any]:
+    """Prøv å bygge crew én gang – fang unntak og lagre error i CREW_STATE."""
+    if CREW_STATE["crew"] is not None:
+        CREW_STATE["ready"] = True
+        return CREW_STATE
+
+    try:
+        from app.loader import load_llm, load_tools, load_agents, load_tasks, load_crew
+
+        llm    = _call_maybe_with_path(load_llm,    LLM_YAML_PATH)
+        tools  = _call_maybe_with_path(load_tools,  TOOLS_YAML_PATH)
+        agents = _call_maybe_with_path(load_agents, AGENTS_YAML_PATH) if callable(load_agents) else None
+        tasks  = _call_maybe_with_path(load_tasks,  TASKS_YAML_PATH)
+
+        # Hvis load_agents faktisk forventer (llm, tools), prøv fallback:
+        if agents is None:
+            try:
+                agents = load_agents(llm, tools)
+            except TypeError:
+                # signatur uten (llm, tools)? – da ble agents allerede satt via path
+                pass
+
+        crew = load_crew(agents, tasks)
+        CREW_STATE.update({"crew": crew, "ready": True, "error": None})
+    except Exception as e:
+        CREW_STATE.update({"ready": False, "error": f"{type(e).__name__}: {e}"})
+        print("Crew init failed:", e)
+
+    return CREW_STATE
+
 # Silence only this specific Pydantic V2 migration warning from CrewAI internals
 #warnings.filterwarnings(
  #   "ignore",
