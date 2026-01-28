@@ -1,16 +1,19 @@
 
-# main.py  
-# --- HOT-SWAP SQLITE FOR CHROMA ---
+# main.py
+# Market Insights – Multi-Agent Crew API
+
 import os
+import sys
 import json
 import warnings
-import sys
-from functools import lru_cache
-from typing import Tuple, Dict, Any
+import threading
+import inspect
+from typing import Dict, Any
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
+# --- HOT-SWAP SQLITE FOR CHROMA ---
 try:
     import pysqlite3 as sqlite3  # loads bundled SQLite >= 3.35
     sys.modules['sqlite3'] = sqlite3
@@ -19,14 +22,22 @@ except Exception as e:
     print("WARNING: sqlite3 hot-swap failed:", e)
 # -----------------------------------
 
+# Load environment variables (.env locally; overridden by Azure App Settings in production)
+load_dotenv(override=True)
+
+BASE = os.path.dirname(__file__)
+
 # FastAPI app (ASGI variable must be named `app`)
 app = FastAPI(title="Market Insights – Multi-Agent Crew API")
 
-
+# --- Health (rask) ---
 @app.get("/healthz")
 def healthz():
     return {"ok": True}
 
+@app.get("/health")
+def health():
+    return {"status": "ok"}
 
 # --- Konfig: YAML-stier (leses fra App Settings; har defaults) ---
 LLM_YAML_PATH    = os.getenv("LLM_YAML_PATH",    "app/config/llm.yaml")
@@ -34,19 +45,59 @@ TOOLS_YAML_PATH  = os.getenv("TOOLS_YAML_PATH",  "app/config/tools.yaml")
 AGENTS_YAML_PATH = os.getenv("AGENTS_YAML_PATH", "app/config/agents.yaml")
 TASKS_YAML_PATH  = os.getenv("TASKS_YAML_PATH",  "app/config/tasks.yaml")
 
-
 # --- Global state for readiness og feilmelding ---
 CREW_STATE: Dict[str, Any] = {"ready": False, "error": None, "crew": None}
 
-def _call_maybe_with_path(func, path):
-    """Kall med sti hvis signaturen krever det; ellers uten."""
+def _maybe_call_with_path(func, path):
+    """
+    Kall 'func' med filsti hvis signaturen tydelig forventer argumenter;
+    ellers kall uten. Robust mot ulike loader-signaturer.
+    """
     try:
-        return func(path)
+        sig = inspect.signature(func)
+        # Hvis signaturen har minst ett parameter, prøv med sti
+        if len(sig.parameters) >= 1:
+            return func(path)
+        return func()
     except TypeError:
+        # Hvis implementasjonen ikke aksepterer path, prøv uten
         return func()
 
-def init_crew() -> Dict[str, Any]:
-    """Prøv å bygge crew én gang – fang unntak og lagre error i CREW_STATE."""
+def _build_agents(load_agents, llm, tools):
+    """
+    load_agents kan ha ulike signaturer:
+      - load_agents(path)
+      - load_agents(llm, tools)
+      - load_agents()  (sjeldent)
+    Vi deduserer basert på parameter-navn og antall.
+    """
+    try:
+        sig = inspect.signature(load_agents)
+        params = list(sig.parameters.values())
+        names  = [p.name for p in params]
+
+        # Hvis den ser ut til å forvente (llm, tools)
+        if ("llm" in names or "tools" in names) and len(params) >= 2:
+            return load_agents(llm, tools)
+
+        # Hvis den ser ut til å forvente en sti
+        if len(params) >= 1:
+            return load_agents(AGENTS_YAML_PATH)
+
+        # Ellers uten argumenter
+        return load_agents()
+    except TypeError:
+        # Fallback: prøv først med sti, deretter med (llm, tools)
+        try:
+            return load_agents(AGENTS_YAML_PATH)
+        except TypeError:
+            return load_agents(llm, tools)
+
+def _init_crew_once() -> Dict[str, Any]:
+    """
+    Bygger crew én gang. Fanger unntak og legger feil i CREW_STATE
+    slik at /status aldri returnerer 500.
+    """
     if CREW_STATE["crew"] is not None:
         CREW_STATE["ready"] = True
         return CREW_STATE
@@ -54,20 +105,30 @@ def init_crew() -> Dict[str, Any]:
     try:
         from app.loader import load_llm, load_tools, load_agents, load_tasks, load_crew
 
-        llm    = _call_maybe_with_path(load_llm,    LLM_YAML_PATH)
-        tools  = _call_maybe_with_path(load_tools,  TOOLS_YAML_PATH)
-        agents = _call_maybe_with_path(load_agents, AGENTS_YAML_PATH) if callable(load_agents) else None
-        tasks  = _call_maybe_with_path(load_tasks,  TASKS_YAML_PATH)
+        # LLM / Tools / Tasks: prøv med sti hvis nødvendig, ellers uten
+        llm    = _maybe_call_with_path(load_llm,    LLM_YAML_PATH)
+        tools  = _maybe_call_with_path(load_tools,  TOOLS_YAML_PATH)
+        tasks  = _maybe_call_with_path(load_tasks,  TASKS_YAML_PATH)
 
-        # Hvis load_agents faktisk forventer (llm, tools), prøv fallback:
-        if agents is None:
-            try:
-                agents = load_agents(llm, tools)
-            except TypeError:
-                # signatur uten (llm, tools)? – da ble agents allerede satt via path
-                pass
+        # Agents: datadrevet valg av signatur
+        agents = _build_agents(load_agents, llm, tools)
 
-        crew = load_crew(agents, tasks)
+        # Crew: typisk load_crew(agents, tasks) eller load_crew(path, agents, tasks)
+        try:
+            sig = inspect.signature(load_crew)
+            params = list(sig.parameters.values())
+            if len(params) >= 3:
+                crew = load_crew("app/config/crew.yaml", agents, tasks)  # just-in-case; tilpass hvis du har en egen crew-fil
+            elif len(params) == 2:
+                crew = load_crew(agents, tasks)
+            elif len(params) == 1:
+                crew = load_crew("app/config/crew.yaml")
+            else:
+                crew = load_crew()
+        except Exception:
+            # Fallback: mest vanlig er (agents, tasks)
+            crew = load_crew(agents, tasks)
+
         CREW_STATE.update({"crew": crew, "ready": True, "error": None})
     except Exception as e:
         CREW_STATE.update({"ready": False, "error": f"{type(e).__name__}: {e}"})
@@ -75,73 +136,21 @@ def init_crew() -> Dict[str, Any]:
 
     return CREW_STATE
 
-# Silence only this specific Pydantic V2 migration warning from CrewAI internals
-#warnings.filterwarnings(
- #   "ignore",
-  #  message="Valid config keys have changed in V2",
-   # category=UserWarning,
-    #module="pydantic._internal._config",
-#)
+# --- Warm-up i bakgrunnen (blokkerer ikke oppstart) ---
+@app.on_event("startup")
+def warm_in_background():
+    threading.Thread(target=_init_crew_once, daemon=True).start()
 
-
-# Load environment variables (.env locally; overridden by Azure App Settings in production)
-load_dotenv(override=True)
-
-BASE = os.path.dirname(__file__)
-
-# Import your loaders
-# from app.loader import load_llm, load_tools, load_agents, load_tasks, load_crew  # noqa: E402
-
-# 2) Lettvekts health-endpoint (svarer alltid raskt)
-@app.get("/healthz")
-def healthz():
-    return {"ok": True}
-
-# 3) Lazy-init: importer tunge ting først når vi trenger dem
-@lru_cache(maxsize=1)
-def get_crew_bootstrap():
-    """
-    Importerer og initialiserer først når den faktisk kalles.
-    Gjør app-oppstart (og SSH) rask og stabil.
-    """
-    # Flytt alle tunge imports hit
-    from app.loader import (
-        load_llm, load_tools, load_agents, load_tasks, load_crew
-    )
-
-    llm = load_llm()
-    tools = load_tools()
-    agents = load_agents(llm, tools)
-    tasks = load_tasks()
-    crew = load_crew(agents, tasks)
-    return {
-        "llm": llm,
-        "tools": tools,
-        "agents": agents,
-        "tasks": tasks,
-        "crew": crew
-    }
-
-
-
-# Ny, enkel root-status for drift/monitorering
+# --- Rask, robust status; både /status og /status/ ---
 @app.get("/status")
 @app.get("/status/")
 def system_status():
-    state = get_crew_bootstrap()
-    return {"crew_ready": state["crew"] is not None}
-
-# (Valgfritt) pre-warm i bakgrunnen ved oppstart
-@app.on_event("startup")
-def warm_in_background():
-    import threading
-    threading.Thread(target=get_crew_bootstrap, daemon=True).start()
-# --------------------------------------------------------------
-
+    state = _init_crew_once()  # trigge init, men aldri kaste ut feil
+    return {"crew_ready": bool(state.get("ready")), "error": state.get("error")}
 
 # ---------- Helpers ----------
 def ensure_keys():
-    required = ["GROQ_API_KEY"]  # add OPENAI_API_KEY, etc. if needed
+    required = ["GROQ_API_KEY"]  # legg til OPENAI_API_KEY hvis nødvendig
     missing = [k for k in required if not os.getenv(k)]
     if missing:
         raise HTTPException(
@@ -149,26 +158,15 @@ def ensure_keys():
             detail=f"Missing environment variables: {', '.join(missing)}"
         )
 
-
-#@lru_cache(maxsize=1)
-#def get_components() -> Tuple[Any, Dict[str, Any], Dict[str, Any], Dict[str, Any], Any]:
-    """
-    Load and cache llm, tools, agents, tasks, and crew.
-    Cache is per-process (reused across requests until container restarts).
-    """
- #   llm = load_llm(os.path.join(BASE, "config/llm.yaml"))
-  #  tools = load_tools(os.path.join(BASE, "crew/tools"))
-   # agents = load_agents(os.path.join(BASE, "crew/agents"), llm, tools)
-    #tasks = load_tasks(os.path.join(BASE, "crew/tasks"), agents)
-    #crew = load_crew(os.path.join(BASE, "crew/crews/market_insights.yaml"), agents, tasks)
-    #return llm, tools, agents, tasks, crew
-
-
 def run_crew_pipeline(topic: str) -> dict:
     ensure_keys()
 
-    # Get cached components
-    _, _, _, _, crew = get_components()
+    # Sørg for at crew finnes
+    state = _init_crew_once()
+    if not state["ready"] or state["crew"] is None:
+        raise HTTPException(status_code=500, detail=f"Crew not ready: {state['error']}")
+
+    crew = state["crew"]
 
     # Execute (CrewAI 1.8+)
     result = crew.kickoff({"topic": topic})
@@ -187,31 +185,18 @@ def run_crew_pipeline(topic: str) -> dict:
 
     return result
 
-
 # ---------- Schemas ----------
 class RunRequest(BaseModel):
     topic: str
 
-
 # ---------- Endpoints ----------
-
-@app.get("/health")
-def health():
-    return {"status": "ok"}
-
 @app.get("/")
 def root():
     return {
         "status": "ok",
         "message": "Market Insights – Multi-Agent Crew API",
-        "endpoints": ["/run (POST)", "/latest (GET)"]
+        "endpoints": ["/run (POST)", "/latest (GET)", "/status (GET)", "/healthz (GET)"]
     }
-
-
-app.get("/status")
-def status():
-    state = get_crew_bootstrap()
-    return {"crew_ready": state["crew"] is not None}
 
 @app.post("/run")
 def run(req: RunRequest):
@@ -222,7 +207,6 @@ def run(req: RunRequest):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
 
 @app.get("/latest")
 def latest():
