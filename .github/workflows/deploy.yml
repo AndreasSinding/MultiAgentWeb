@@ -1,7 +1,7 @@
 name: Deploy FastAPI to Azure Web App (Publish Profile, GitHub Actions)
 
 on:
-  push:
+  push: 
     branches: [ main ]
   workflow_dispatch:
 
