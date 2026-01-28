@@ -75,6 +75,21 @@ def get_crew_bootstrap():
     }
 
 
+
+# Ny, enkel root-status for drift/monitorering
+@app.get("/status")
+def system_status():
+    state = get_crew_bootstrap()
+    return {"crew_ready": state["crew"] is not None}
+
+# (Valgfritt) pre-warm i bakgrunnen ved oppstart
+@app.on_event("startup")
+def warm_in_background():
+    import threading
+    threading.Thread(target=get_crew_bootstrap, daemon=True).start()
+# --------------------------------------------------------------
+
+
 # ---------- Helpers ----------
 def ensure_keys():
     required = ["GROQ_API_KEY"]  # add OPENAI_API_KEY, etc. if needed
