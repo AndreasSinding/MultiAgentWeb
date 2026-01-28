@@ -1,5 +1,5 @@
 
-# main.py 
+# main.py  
 # --- HOT-SWAP SQLITE FOR CHROMA ---
 import sys
 try:
