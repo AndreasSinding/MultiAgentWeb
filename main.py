@@ -34,9 +34,12 @@ def health():
 
 # Only LLM path (since you don't have tools/agents/tasks)
 LLM_YAML_PATH = os.getenv("LLM_YAML_PATH", "config/llm.yaml")
+#CREW_YAML_PATH = os.getenv("CREW_YAML_PATH", "config/crew.yaml")  # use if you have a crew yaml
 
 # Shared readiness state
 CREW_STATE: Dict[str, Any] = {"ready": False, "error": None, "crew": None, "llm": None}
+
+
 
 def _call_with_optional_path(func, path: Optional[str] = None):
     """
@@ -54,25 +57,22 @@ def _call_with_optional_path(func, path: Optional[str] = None):
 
 def build_llm_and_crew_once() -> Dict[str, Any]:
     """
-    Build LLM and Crew one time, with graceful fallbacks depending on what
-    exists in app.loader. Never throws; stores errors in CREW_STATE.
+    Build LLM and Crew one time, with graceful fallbacks.
+    Never throws; stores errors in CREW_STATE.
     """
     if CREW_STATE["ready"] and CREW_STATE["crew"] is not None:
         return CREW_STATE
 
     try:
-        # Try to import available loaders
+        # Import available loaders
         try:
             from app.loader import load_llm
         except ImportError:
             load_llm = None
-
         try:
             from app.loader import load_crew
         except ImportError:
             load_crew = None
-
-        # Optional loaders (you said you don't have these)
         try:
             from app.loader import load_tools
         except ImportError:
@@ -89,64 +89,71 @@ def build_llm_and_crew_once() -> Dict[str, Any]:
         # 1) LLM
         llm = None
         if load_llm is not None:
-            # Prefer calling with LLM_YAML_PATH; if loader doesn't need a path, it will use no-arg
             try:
-                llm = _call_with_optional_path(load_llm, LLM_YAML_PATH)
+                # Prefer calling with LLM_YAML_PATH; fallback to no-arg
+                sig = inspect.signature(load_llm)
+                llm = load_llm(LLM_YAML_PATH) if len(sig.parameters) >= 1 else load_llm()
             except Exception:
                 llm = load_llm()
+
         CREW_STATE["llm"] = llm
 
-        # 2) Optional components (only if functions exist)
-        tools = load_tools(llm) if (load_tools and len(inspect.signature(load_tools).parameters) >= 1) else (load_tools() if load_tools else None)
+        # 2) Optional items (if present)
+        tools = None
+        if load_tools:
+            sig = inspect.signature(load_tools)
+            tools = load_tools(TOOLS_YAML_PATH) if len(sig.parameters) >= 1 else load_tools()
 
         agents = None
         if load_agents:
             sig = inspect.signature(load_agents)
-            if len(sig.parameters) >= 2:
+            if len(sig.parameters) >= 2 and llm is not None and tools is not None:
                 agents = load_agents(llm, tools)
             elif len(sig.parameters) >= 1:
-                # If it expects a path but you don't have agents.yaml, call without args
                 try:
-                    agents = load_agents("config/agents.yaml")
+                    agents = load_agents(os.getenv("AGENTS_YAML_PATH", "config/agents.yaml"))
                 except Exception:
                     agents = load_agents()
+            else:
+                agents = load_agents()
 
         tasks = None
         if load_tasks:
             sig = inspect.signature(load_tasks)
             if len(sig.parameters) >= 1:
-                # If it expects a path but you don't have tasks.yaml, call without args
                 try:
-                    tasks = load_tasks("config/tasks.yaml")
+                    tasks = load_tasks(os.getenv("TASKS_YAML_PATH", "config/tasks.yaml"))
                 except Exception:
                     tasks = load_tasks()
             else:
                 tasks = load_tasks()
 
-        # 3) Crew
-        crew = None
+        # 3) Crew (make path the first choice if it looks like it's required)
         if load_crew is None:
             raise RuntimeError("No load_crew() found in app.loader")
 
-        # Try common signatures: load_crew(agents, tasks), load_crew(llm), load_crew()
-        try:
-            sig_crew = inspect.signature(load_crew)
-            n = len(sig_crew.parameters)
-            if n >= 2 and agents is not None and tasks is not None:
-                crew = load_crew(agents, tasks)
-            elif n >= 1 and llm is not None:
-                crew = load_crew(llm)
-            elif n == 0:
-                crew = load_crew()
-            else:
-                # Fallback: try simplest first
+        crew = None
+        if _crew_wants_path(load_crew) and os.path.exists(CREW_YAML_PATH):
+            crew = load_crew(CREW_YAML_PATH)
+        else:
+            # try common signatures by order of likelihood
+            tried = []
+            try:
+                crew = load_crew(agents, tasks); tried.append("(agents, tasks)")
+            except Exception:
                 try:
-                    crew = load_crew()
+                    crew = load_crew(llm); tried.append("(llm)")
                 except Exception:
-                    if llm is not None:
-                        crew = load_crew(llm)
-        except Exception as e:
-            raise RuntimeError(f"load_crew failed: {e}")
+                    try:
+                        crew = load_crew(); tried.append("()")
+                    except Exception as e:
+                        # if it looked like a path was needed but the file doesn't exist, report clearly
+                        if _crew_wants_path(load_crew) and not os.path.exists(CREW_YAML_PATH):
+                            raise RuntimeError(
+                                f"load_crew appears to require a YAML path but {CREW_YAML_PATH} was not found. "
+                                f"Either add the file or set CREW_YAML_PATH to an existing YAML."
+                            ) from e
+                        raise RuntimeError(f"load_crew failed after trying {tried}: {e}") from e
 
         CREW_STATE.update({"crew": crew, "ready": True, "error": None})
     except Exception as e:
