@@ -1,5 +1,14 @@
 
 # main.py 
+# --- HOT-SWAP SQLITE FOR CHROMA ---
+import sys
+try:
+    import pysqlite3 as sqlite3  # loads bundled SQLite >= 3.35
+    sys.modules['sqlite3'] = sqlite3
+    print("Using pysqlite3-binary as sqlite3 backend")
+except Exception as e:
+    print("WARNING: sqlite3 hot-swap failed:", e)
+# -----------------------------------
 import os
 import json
 import warnings
