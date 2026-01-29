@@ -1,6 +1,6 @@
 
 from pydantic import BaseModel, Field
-from typing import List
+from typing import List, Optional
 
 class Trend(BaseModel):
     title: str
@@ -33,4 +33,23 @@ class AnalysisOutput(BaseModel):
     opportunities: List[str]
     risks: List[str]
     recommendations: List[Recommendation]
+    
+class SummaryOutput(BaseModel):
+    topic: Optional[str] = None
+    bullets: List[str] = []
+    final_summary: Optional[str] = None    
 
+
+class LLM(BaseModel):
+    provider: str = "groq"
+    model: str = "llama-3.3-70b-versatile"
+    api_key: Optional[str] = None
+    base_url: Optional[str] = "https://api.groq.com/openai/v1"
+    temperature: float = 0.2
+
+# ---- Registry the loader uses ----
+SCHEMA_REGISTRY = {
+    "AnalysisOutput": AnalysisOutput,
+    "ResearchOutput": ResearchOutput,
+    "SummaryOutput": SummaryOutput,
+}
