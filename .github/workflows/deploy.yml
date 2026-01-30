@@ -1,9 +1,14 @@
-name: Deploy Python FastAPI (Oryx build on Azure) 
+name: Deploy Python FastAPI (Oryx build on Azure)
 
 on:
   push:
     branches:
       - multiagent-v2
+
+# Prevent overlapping deploys to the same branch (avoids OneDeploy conflicts / 409).
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build-and-deploy:
@@ -13,7 +18,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # Optional lint/sanity checks could go here (flake8, mypy), omitted for simplicity.
+      # Optional: lint/sanity checks could go here (flake8, mypy), omitted for simplicity.
 
       # IMPORTANT: We do NOT install dependencies in CI for this option.
       # Azure (Oryx) will install them server-side using requirements.txt.
