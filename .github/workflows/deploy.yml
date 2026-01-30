@@ -1,4 +1,4 @@
-name: Deploy Python FastAPI (Oryx build on Azure)
+name: Deploy Python FastAPI (Oryx build on Azure) 
 
 on:
   push:
