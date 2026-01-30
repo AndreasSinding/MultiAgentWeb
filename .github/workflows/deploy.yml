@@ -16,7 +16,7 @@ jobs:
 
       # STEP 2 — Login to Azure using the Publish Profile secret
       - name: Azure Login
-        uses: azure/login@v1
+        uses: azure/login@v2
         with:
           publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE }}
 
