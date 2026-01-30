@@ -3,7 +3,7 @@ name: Deploy Python App to Azure Web App
 on:
   push:
     branches:
-      - multiagent-v2
+      - multiagent-v2 
 
 jobs:
   build-and-deploy:
