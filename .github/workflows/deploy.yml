@@ -1,4 +1,4 @@
-name: Deploy Python FastAPI (CI-built dependencies)
+name: Deploy Python FastAPI (Oryx build on Azure)
 
 on:
   push:
@@ -13,34 +13,18 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
+      # Optional lint/sanity checks could go here (flake8, mypy), omitted for simplicity.
 
-      - name: Upgrade pip
-        run: python -m pip install --upgrade pip
+      # IMPORTANT: We do NOT install dependencies in CI for this option.
+      # Azure (Oryx) will install them server-side using requirements.txt.
 
-      - name: Install dependencies into .python_packages
-        run: |
-          python -m pip install -r requirements.txt --target .python_packages/lib/site-packages
-
-      - name: Validate dependencies (uvicorn/fastapi/gunicorn present)
-        run: |
-          python - <<'EOF'
-          import sys, os
-          sys.path.insert(0, ".python_packages/lib/site-packages")
-          import uvicorn, fastapi, gunicorn
-          print("Dependencies OK in CI")
-          EOF
-
-      - name: Deploy to Azure Web App (publish profile)
+      - name: Deploy to Azure Web App (OneDeploy + Oryx build)
         uses: azure/webapps-deploy@v3
         with:
           app-name: multiagentcrew
           publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
           package: .
-          # Keep using ZIP package upload here as well so nested folders are preserved reliably.
+          # Force a zipped package upload so Oryx recognizes and builds the Python app
           type: zip
           clean: true
           restart: true
