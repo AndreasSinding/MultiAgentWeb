@@ -14,11 +14,15 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      # STEP 2 — Upload your app to Azure App Service
-      # (Azure handles the Python build using Oryx)
+      # STEP 2 — Login to Azure using the Publish Profile secret
+      - name: Azure Login
+        uses: azure/login@v1
+        with:
+          publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE }}
+
+      # STEP 3 — Deploy to your Azure Web App using Oryx build
       - name: Deploy to Azure Web App
         uses: azure/webapps-deploy@v2
         with:
           app-name: multiagentcrew
-          publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE }}
           package: .
