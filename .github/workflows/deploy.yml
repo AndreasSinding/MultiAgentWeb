@@ -10,19 +10,16 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # STEP 1 — Pull your code
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      # STEP 2 — Login to Azure using the Publish Profile secret
-      - name: Azure Login
-        uses: azure/login@v2
-        with:
-          publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE }}
-
-      # STEP 3 — Deploy to your Azure Web App using Oryx build
+      # DIRECT DEPLOY USING PUBLISH PROFILE
+      # No Azure Login step required!
       - name: Deploy to Azure Web App
-        uses: azure/webapps-deploy@v2
+        uses: azure/webapps-deploy@v3
         with:
           app-name: multiagentcrew
+          publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
           package: .
+          clean: true
+          restart: true
