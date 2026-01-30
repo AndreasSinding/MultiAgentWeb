@@ -11,12 +11,36 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies into .python_packages (no venv)
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt --target .python_packages/lib/site-packages
+
+      # (Optional) quick sanity check
+      - name: Verify uvicorn is present
+        run: |
+          python -c "import sys; sys.path.insert(0, '.python_packages/lib/site-packages'); import uvicorn, fastapi, gunicorn; print('Deps OK')"
 
       - name: Deploy to Azure Web App
         uses: azure/webapps-deploy@v3
         with:
           app-name: multiagentcrew
           publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
+          package: .
           clean: true
           restart: true
