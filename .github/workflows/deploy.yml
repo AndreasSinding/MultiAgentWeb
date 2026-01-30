@@ -18,18 +18,23 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # Optional: lint/sanity checks could go here (flake8, mypy), omitted for simplicity.
+      # Optional: add lint/type-check steps here if you like.
 
-      # IMPORTANT: We do NOT install dependencies in CI for this option.
-      # Azure (Oryx) will install them server-side using requirements.txt.
+      # Create a reproducible ZIP package explicitly to avoid EISDIR in webapps-deploy.
+      # Exclude .git and the workflows folder to keep the artifact clean.
+      - name: Create deployment ZIP
+        run: |
+          zip -r deploy.zip . \
+            -x ".git/*" \
+            -x ".github/workflows/*"
 
+      # Deploy the ZIP package. Using a concrete file path avoids EISDIR.
       - name: Deploy to Azure Web App (OneDeploy + Oryx build)
         uses: azure/webapps-deploy@v3
         with:
           app-name: multiagentcrew
           publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
-          package: .
-          # Force a zipped package upload so Oryx recognizes and builds the Python app
-          type: zip
+          package: deploy.zip
+          type: zip          # keep zip to trigger Oryx server-side Python build
           clean: true
           restart: true
