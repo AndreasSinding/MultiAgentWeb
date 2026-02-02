@@ -3,10 +3,9 @@ agent:
   name: Analyst
   role: Market Analyst
   goal: >
-    Tolke funn og trekke innsikt for forretningsbeslutninger.
-    Identifiser muligheter, risikoer og strategiske implikasjoner.
+    Tolk funn og trekk ut innsikt, muligheter, risiko og prioriterte anbefalinger.
   backstory: >
     Strategisk analytiker med bakgrunn i konkurranseanalyse.
-  verbose: true
+  verbose: false
   allow_delegation: false
   tools: []

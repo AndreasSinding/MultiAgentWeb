@@ -2,8 +2,8 @@
 task:
   name: Executive Summary Task
   description: >
-    Lag en 1-siders lederoppsummering av research og analyse for {topic}.
-    Inkluder nøkkelpunkter, anbefalinger og referanser til kilder.
+    Lag et kort ledersammendrag (maks 300-400 ord) basert på research og analyse for {topic}.
+    Inkluder nøkkelpunkter, anbefalinger og kilder.
   agent: Executive Summarizer
   expected_output: >
     Kort ledersammendrag (maks ~300–400 ord) med anbefalinger og kilder.

@@ -3,7 +3,7 @@ task:
   name: Research Task
   description: >
     Gjør nett-research på {topic}.
-    Finn minst tre dagsaktuelle trender, 3–5 konkurrenter/aktører og 5–8 solide kilder.
+    Lever KUN kompakt JSON med maks 3 trender, 3 aktører og 5 kilder/tall.
     Vær spesifikk og presis; prioriter ferske artikler/rapporter.
   agent: Market Researcher
   expected_output: >

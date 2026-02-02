@@ -1,0 +1,250 @@
+# ui/app.py
+import os
+import re
+import sys
+import json
+import requests
+import streamlit as st
+from pptx import Presentation
+from pptx.util import Inches, Pt
+
+# -------------------------------------
+# CONFIGURATION
+# -------------------------------------
+FASTAPI_URL = "http://127.0.0.1:8787"  # change to your Azure URL when deployed
+
+# Ensure UTF-8 so Norwegian chars Ø/Å/Æ render correctly in logs
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+except Exception:
+    pass
+
+
+# -------------------------------------
+# CALL BACKEND
+# -------------------------------------
+def call_crewai(topic: str):
+    try:
+        resp = requests.post(
+            f"{FASTAPI_URL}/run",
+            json={"topic": topic},
+            timeout=120,
+        )
+        resp.raise_for_status()
+        return resp.json()
+    except requests.exceptions.ConnectionError:
+        st.error(f"Could not reach backend at {FASTAPI_URL}. Is uvicorn running?")
+        raise
+    except requests.exceptions.HTTPError as e:
+        # Show backend's error text (e.g., missing env vars)
+        try:
+            st.error(f"Backend returned {resp.status_code}: {resp.text}")
+        except Exception:
+            st.error("Backend returned an error.")
+        raise
+    except Exception as e:
+        st.error(f"Unexpected error calling backend: {e}")
+        raise
+
+
+# -------------------------------------
+# CREATE MULTI-SLIDE PPTX LOCALLY
+# -------------------------------------
+def _safe_filename(base: str) -> str:
+    # Windows-safe filename
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "_", base).strip("_")
+    return safe or "report"
+
+
+def create_multislide_pptx(result: dict, topic: str, file_name: str = None):
+    """
+    Builds a multi-slide PPTX from the MultiAgent result JSON.
+    Uses:
+      - Executive summary from result.result.raw (fallback if summary absent)
+      - Structured arrays (trends/competitors/numbers/sources) parsed from tasks_output[0].raw when present
+      - Recommendations parsed from any tasks_output containing a JSON with "recommendations"
+    """
+    data = result.get("result", {})  # {"raw": "...", "tasks_output": [...] , ...}
+
+    # Executive summary (your payload doesn't include 'summary', so we fallback to 'raw')
+    exec_summary = data.get("summary") or data.get("raw") or "Ingen oppsummering tilgjengelig"
+
+    # Try to parse the structured 'research' JSON (trends/competitors/numbers/sources)
+    research = None
+    for block in data.get("tasks_output", []):
+        raw = block.get("raw")
+        if isinstance(raw, str):
+            raw_str = raw.strip()
+            # Heuristic: if it looks like a JSON object, try to parse it
+            if raw_str.startswith("{") and raw_str.endswith("}"):
+                try:
+                    research = json.loads(raw_str)
+                    # keep the first valid JSON we find
+                    break
+                except Exception:
+                    pass
+
+    trends_list = research.get("trends", []) if research else []
+    competitors = research.get("competitors", []) if research else []
+    numbers = research.get("numbers", []) if research else []
+    sources = research.get("sources", []) if research else []
+
+    # Try to find a JSON block with "recommendations" (from the analysis task)
+    recs = []
+    for block in data.get("tasks_output", []):
+        raw = block.get("raw")
+        if isinstance(raw, str):
+            raw_str = raw.strip()
+            if raw_str.startswith("{") and '"recommendations"' in raw_str:
+                try:
+                    analysis = json.loads(raw_str)
+                    recs = analysis.get("recommendations", [])
+                    break
+                except Exception:
+                    pass
+
+    prs = Presentation()  # start from a blank deck (you can also load your own theme here)
+
+    # --- Title slide
+    slide = prs.slides.add_slide(prs.slide_layouts[0])
+    slide.shapes.title.text = "MultiAgent Report"
+    slide.placeholders[1].text = topic
+
+    # --- Executive Summary
+    slide = prs.slides.add_slide(prs.slide_layouts[1])
+    slide.shapes.title.text = "Executive Summary"
+    tf = slide.placeholders[1].text_frame
+    tf.clear()
+    p = tf.paragraphs[0]
+    p.text = exec_summary
+    p.level = 0
+
+    # --- Trends
+    slide = prs.slides.add_slide(prs.slide_layouts[1])
+    slide.shapes.title.text = "Key Trends"
+    tf = slide.placeholders[1].text_frame
+    tf.clear()
+    if trends_list:
+        for i, t in enumerate(trends_list[:6]):
+            p = tf.paragraphs[0] if i == 0 else tf.add_paragraph()
+            title = t.get("title", "")
+            evidence = t.get("evidence", "")
+            why = t.get("why_it_matters", "")
+            p.text = f"{title} — {evidence}. Why: {why}"
+            p.level = 0
+    else:
+        tf.text = "No structured trends found."
+
+    # --- Competitors (table)
+    slide = prs.slides.add_slide(prs.slide_layouts[5])  # Title Only
+    slide.shapes.title.text = "Competitors / Actors"
+    left, top, width, height = Inches(0.5), Inches(1.5), Inches(9.0), Inches(1.0)
+    rows = min(1 + max(1, len(competitors)), 1 + 10)  # header + up to 10
+    table = slide.shapes.add_table(rows, 3, left, top, width, height).table
+    headers = ["Name", "Position", "Notes"]
+    for j, h in enumerate(headers):
+        cell = table.cell(0, j)
+        cell.text = h
+        for para in cell.text_frame.paragraphs:
+            para.font.bold = True
+            para.font.size = Pt(14)
+    if competitors:
+        for i, comp in enumerate(competitors[: rows - 1], start=1):
+            table.cell(i, 0).text = comp.get("name", "")
+            table.cell(i, 1).text = comp.get("position", "")
+            table.cell(i, 2).text = comp.get("notes", "")
+    else:
+        if rows >= 2:
+            table.cell(1, 0).text = "No structured competitors found"
+
+    # --- Numbers (table)
+    slide = prs.slides.add_slide(prs.slide_layouts[5])  # Title Only
+    slide.shapes.title.text = "Key Numbers"
+    left, top, width, height = Inches(0.5), Inches(1.5), Inches(9.0), Inches(1.0)
+    rows = min(1 + max(1, len(numbers)), 1 + 12)
+    table = slide.shapes.add_table(rows, 3, left, top, width, height).table
+    headers = ["Metric", "Value", "Source"]
+    for j, h in enumerate(headers):
+        cell = table.cell(0, j)
+        cell.text = h
+        for para in cell.text_frame.paragraphs:
+            para.font.bold = True
+            para.font.size = Pt(14)
+    if numbers:
+        for i, n in enumerate(numbers[: rows - 1], start=1):
+            table.cell(i, 0).text = n.get("metric", "")
+            table.cell(i, 1).text = n.get("value", "")
+            table.cell(i, 2).text = n.get("source", "")
+    else:
+        if rows >= 2:
+            table.cell(1, 0).text = "No structured numbers found"
+
+    # --- Recommendations (Top 5)
+    slide = prs.slides.add_slide(prs.slide_layouts[1])
+    slide.shapes.title.text = "Recommendations (Top 5)"
+    tf = slide.placeholders[1].text_frame
+    tf.clear()
+    if recs:
+        for i, r in enumerate(recs[:5]):
+            p = tf.paragraphs[0] if i == 0 else tf.add_paragraph()
+            p.text = f"{r.get('priority', i+1)}) {r.get('action','')} — Why: {r.get('rationale','')}"
+            p.level = 0
+    else:
+        tf.text = "No structured recommendations found."
+
+    # --- Sources
+    slide = prs.slides.add_slide(prs.slide_layouts[1])
+    slide.shapes.title.text = "Sources"
+    tf = slide.placeholders[1].text_frame
+    tf.clear()
+    if sources:
+        for i, s in enumerate(sources[:12]):
+            p = tf.paragraphs[0] if i == 0 else tf.add_paragraph()
+            p.text = str(s)
+            p.level = 0
+    else:
+        tf.text = "No structured sources found."
+
+    # Save
+    if not file_name:
+        safe_topic = _safe_filename(topic)
+        file_name = f"{safe_topic}_report.pptx"
+    prs.save(file_name)
+    return file_name
+
+
+# -------------------------------------
+# STREAMLIT UI
+# -------------------------------------
+st.set_page_config(page_title="MultiAgent UI", layout="centered")
+
+st.title("🤖 MultiAgent – Report Generator")
+st.subheader("Welcome to the MultiAgent! Please insert your research topic.")
+
+topic = st.text_input("Research Topic", placeholder="e.g., Outlook for AI market in Nordic region 2026")
+
+if st.button("Generate Report"):
+    if not topic.strip():
+        st.warning("Please enter a topic.")
+    else:
+        st.write(f"Using backend URL: {FASTAPI_URL}")  # helpful for quick debugging
+        with st.spinner("Running MultiAgent analysis..."):
+            result = call_crewai(topic)
+
+        st.success("Analysis complete!")
+        with st.expander("Show raw JSON result"):
+            st.json(result)
+
+        # Create MULTI-SLIDE pptx (REPLACED create_pptx with create_multislide_pptx)
+        file_path = create_multislide_pptx(result, topic)
+
+        # Allow download
+        with open(file_path, "rb") as f:
+            st.download_button(
+                label="⬇ Download PowerPoint Report",
+                data=f,
+                file_name=os.path.basename(file_path),
+                mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            )
+
+        st.info(f"PowerPoint generated: {file_path}")

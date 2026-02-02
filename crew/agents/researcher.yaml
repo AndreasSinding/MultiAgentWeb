@@ -7,7 +7,7 @@ agent:
     Fokuser på trender, drivere, tall og viktige aktører.
   backstory: >
     Senior researcher som bruker søkeverktøy effektivt og oppgir kilder.
-  verbose: true
+  verbose: false
   allow_delegation: false
   tools:
     - tavily        # or serper (match with tools YAML), optional
