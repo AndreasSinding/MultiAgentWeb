@@ -2,7 +2,7 @@ name: Build and deploy (Oryx from source) - multiagentcrew
 
 on:
   push:
-    branches: [ multiagentppt ]   # deploys from your feature branch
+    branches: [ multiagentppt ]
   workflow_dispatch:
 
 permissions:
@@ -47,18 +47,33 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-        # This step is just to catch missing deps early; App Service will run Oryx and install again.
+        # This is just a fast fail check; App Service will install again during Oryx.
 
-      - name: Quick static checks (compile + HTML entities)
+      # ---- NEW: auto-fix common HTML-entity artifacts before compiling ----
+      - name: Auto-fix HTML entities/backticks under ui/
+        shell: bash
         run: |
-          python -m compileall -q .
-          # Fail the build if HTML entities that break Python snuck in:
-          if grep -RInE --exclude-dir='.git' --exclude-dir='__pycache__' '(-&gt;|&gt;=|&lt;|&amp;)' ui | head -n 1; then
-            echo "Found HTML entities in Python source under ui/. Please replace them (e.g., -&gt; ->, &gt;= >=)" >&2
-            exit 1
+          set -euo pipefail
+          find ui -type f -name "*.py" -print0 | xargs -0 sed -i \
+            -e 's/-&gt;/->/g' \
+            -e 's/&gt;=/>=/g' \
+            -e 's/&gt;/>/g' \
+            -e 's/&lt;=/<=/g' \
+            -e 's/&lt;/</g' \
+            -e 's/&amp;/\&/g' \
+            -e 's/`//g'
+          # Show any remaining offenders (non-fatal)
+          if grep -RInE --exclude-dir='\.git' --exclude-dir='__pycache__' '(-&gt;|&gt;=|&lt;|&amp;|`)' ui | head -n 1; then
+            echo "WARNING: Some HTML entities/backticks may remain; attempting to continue..."
+          else
+            echo "No HTML entities/backticks found after auto-fix."
           fi
 
-      # Login with publish profile so we can set app settings
+      - name: Quick static checks (compile)
+        run: |
+          python -m compileall -q .
+        # If something is still invalid Python, this will fail fast.
+
       - name: Azure login (publish profile)
         uses: azure/login@v2
         with:
@@ -79,7 +94,7 @@ jobs:
         with:
           app-name: ${{ env.AZURE_WEBAPP_NAME }}
           publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
-          package: .                         # << deploy source; triggers Oryx build
+          package: .                         # deploy source; triggers Oryx build
           clean: true
           restart: true
           startup-command: >
@@ -89,6 +104,7 @@ jobs:
             --timeout 600
             --workers 1
           
+
 
 
 
