@@ -65,7 +65,7 @@ jobs:
   deploy:
     runs-on: ubuntu-22.04
     needs: build
-    timeout-minutes: 15
+    timeout-minutes: 45
 
     steps:
       - name: Download packaged artifact
@@ -100,6 +100,7 @@ jobs:
       #    slot-name: 'Production'
 
           
+
 
 
 
