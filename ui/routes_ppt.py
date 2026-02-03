@@ -2,9 +2,9 @@
 from fastapi import APIRouter, Body
 from fastapi.responses import FileResponse
 from typing import Any, Dict
-import os, tempfile, json
+import os, tempfile
 
-from .app import create_multislide_pptx   # <- relative import from ui/app.py
+from .ppt_builder import create_multislide_pptx
 
 router = APIRouter(prefix="/reports", tags=["PowerPoint"])
 
@@ -26,13 +26,14 @@ async def generate_pptx(payload: Dict[str, Any] = Body(...)):
     result = payload.get("result", {})
     topic = payload.get("topic", "MultiAgent Report")
 
-    tmpdir = tempfile.gettempdir()
-    file_path = os.path.join(tmpdir, f"{topic.replace(' ', '_')}_report.pptx")
+    # write to temp (safe on App Service)
+    fd, tmp_path = tempfile.mkstemp(suffix=".pptx")
+    os.close(fd)
 
-    create_multislide_pptx(result=result, topic=topic, file_name=file_path)
+    create_multislide_pptx(result=result, topic=topic, file_name=tmp_path)
 
     return FileResponse(
-        path=file_path,
+        path=tmp_path,
         media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-        filename=os.path.basename(file_path),
+        filename=f"{topic.replace(' ', '_')}_report.pptx",
     )
