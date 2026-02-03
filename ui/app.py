@@ -19,58 +19,6 @@ try:
 except Exception:
     pass
 
-# ui/routes_ppt.py
-from fastapi import APIRouter, Body
-from fastapi.responses import FileResponse, StreamingResponse
-from typing import Any, Dict
-import os, tempfile
-
-from .app import create_multislide_pptx  # your function
-
-router = APIRouter(prefix="/reports", tags=["PowerPoint"])
-
-@router.post(
-    "/pptx",
-    response_class=FileResponse,
-    responses={
-        200: {
-            "description": "Generated PowerPoint file",
-            "content": {
-                # Use the official PPTX media type so Swagger shows a download button
-                "application/vnd.openxmlformats-officedocument.presentationml.presentation": {
-                    "schema": {"type": "string", "format": "binary"}
-                }
-            },
-        }
-    },
-)
-async def generate_pptx(payload: Dict[str, Any] = Body(...)):
-    """
-    Expects a payload with at least:
-      {
-        "result": {...},   # the CrewAI result JSON your function expects
-        "topic": "Some title"
-      }
-    """
-    result = payload.get("result", {})
-    topic = payload.get("topic", "MultiAgent Report")
-
-    # Use a writable temp directory (works well on Azure App Service Linux)
-    tmpdir = tempfile.gettempdir()
-    fd, tmp_path = tempfile.mkstemp(dir=tmpdir, suffix=".pptx")
-    os.close(fd)  # we'll let python-pptx write to this path
-
-    # Build the PPTX file on disk
-    create_multislide_pptx(result=result, topic=topic, file_name=tmp_path)
-
-    # Nice download name for the user:
-    filename = f"{topic.replace(' ', '_')}_report.pptx"
-
-    return FileResponse(
-        path=tmp_path,
-        media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-        filename=filename,
-    )
 
 # -------------------------------------
 # CALL BACKEND
