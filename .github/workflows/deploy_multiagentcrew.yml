@@ -1,4 +1,4 @@
-name: Build and deploy (ZIP + OneDeploy) - multiagentcrew
+name: Build and deploy (Oryx from source) - multiagentcrew
 
 on:
   push:
@@ -7,99 +7,89 @@ on:
 
 permissions:
   contents: read
-  id-token: write                 # for Azure OIDC
+  id-token: write
 
 concurrency:
   group: multiagentcrew-prod-deploy
-  cancel-in-progress: true       # ensures no two deployments run in parallel
+  cancel-in-progress: true
+
+env:
+  AZURE_WEBAPP_NAME: multiagentcrew
+  PYTHON_VERSION: '3.11'
 
 jobs:
-  build:
-    #runs-on: ubuntu-latest
+  deploy:
     runs-on: ubuntu-22.04
-    timeout-minutes: 10
+    timeout-minutes: 45
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: Set up Python (for sanity checks only)
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Ensure runtime.txt (forces Python detection)
         run: |
           if [ ! -f runtime.txt ]; then
-            echo "python-3.11" > runtime.txt
-          fi    
+            echo "python-${{ env.PYTHON_VERSION }}" > runtime.txt
+          fi
+          cat runtime.txt
 
       - name: Verify requirements.txt exists at repo root
         run: |
           test -f requirements.txt || (echo "requirements.txt missing at repo root" && exit 1)
+          head -n 50 requirements.txt || true
 
-      # Optional quick validation; do NOT ship a venv
-      - name: Dependency sanity check (local only)
+      - name: Dependency sanity check (runner only)
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+        # This step is just to catch missing deps early; App Service will run Oryx and install again.
 
-      # Create a clean deployment ZIP at repo root: deploy.zip
-      - name: Create deployment ZIP
+      - name: Quick static checks (compile + HTML entities)
         run: |
-          zip -r deploy.zip . \
-            -x ".git/**" ".github/**" "tests/**" \
-               "**/__pycache__/**" "*.pyc" ".DS_Store" \
-               ".venv/**" "venv/**" "antenv/**" \
-               ".vscode/**" ".devcontainer/**"
-      
-      - name: Inspect deploy.zip (top ~200 lines)
-        run: unzip -l deploy.zip | sed -n '1,200p'
+          python -m compileall -q .
+          # Fail the build if HTML entities that break Python snuck in:
+          if grep -RInE --exclude-dir='.git' --exclude-dir='__pycache__' '(-&gt;|&gt;=|&lt;|&amp;)' ui | head -n 1; then
+            echo "Found HTML entities in Python source under ui/. Please replace them (e.g., -&gt; ->, &gt;= >=)" >&2
+            exit 1
+          fi
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+      # Login with publish profile so we can set app settings
+      - name: Azure login (publish profile)
+        uses: azure/login@v2
         with:
-          name: deploy-zip
-          path: deploy.zip
+          publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
 
-  deploy:
-    runs-on: ubuntu-22.04
-    needs: build
-    timeout-minutes: 45
+      - name: Ensure 'SCM_DO_BUILD_DURING_DEPLOYMENT' app setting (Oryx build)
+        shell: bash
+        run: |
+          set -euo pipefail
+          RG=$(az resource show --resource-type Microsoft.Web/sites -n "${{ env.AZURE_WEBAPP_NAME }}" --query resourceGroup -o tsv)
+          echo "Resolved resource group: $RG"
+          az webapp config appsettings set -g "$RG" -n "${{ env.AZURE_WEBAPP_NAME }}" \
+            --settings SCM_DO_BUILD_DURING_DEPLOYMENT=true
+          echo "Confirmed SCM_DO_BUILD_DURING_DEPLOYMENT=true"
 
-    steps:
-      - name: Download packaged artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: deploy-zip
-          path: .
-
-      #- name: Azure login (OIDC)
-      #  uses: azure/login@v2
-      #  with:
-      #    client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_CBF3047E30DE490EAAAFA91F8967D176 }}
-      #    tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_DE1AC3F0CE894C939DF7FA4D38A902C1 }}
-      #    subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_F9B6DC29394743E5875BC2DE0D7D4B11 }}
-
-      - name: Deploy to Azure Web App (OneDeploy ZIP)
+      - name: Deploy to Azure Web App (source folder → Oryx build)
         uses: azure/webapps-deploy@v3
         with:
-          app-name: multiagentcrew
+          app-name: ${{ env.AZURE_WEBAPP_NAME }}
           publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
-          package: deploy.zip      # <— critical to avoid EISDIR
-          type: zip                # <— ensure OneDeploy treats as zip package
-          clean: true              # remove stale server files
-          restart: true            # restart after deployment
-          # slot-name: production  # default is production}
-
-      #- name: 'Deploy to Azure Web App'
-      #  uses: azure/webapps-deploy@v3
-      #  id: deploy-to-webapp
-      #  with:
-      #    app-name: 'multiagentcrew'
-      #    slot-name: 'Production'
-
+          package: .                         # << deploy source; triggers Oryx build
+          clean: true
+          restart: true
+          startup-command: >
+            gunicorn main:app
+            -k uvicorn.workers.UvicornWorker
+            --bind=0.0.0.0:$PORT
+            --timeout 600
+            --workers 1
           
+
 
 
 
