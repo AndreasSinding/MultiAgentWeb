@@ -162,4 +162,3 @@ def create_multislide_pptx(result: dict, topic: str, file_name: str = None) -> s
         file_name = f"{safe_topic}_report.pptx"
     prs.save(file_name)
     return file_name
-``
