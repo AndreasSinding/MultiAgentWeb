@@ -4,7 +4,8 @@ from fastapi.responses import FileResponse
 from typing import Any, Dict
 import os, tempfile
 
-from .ppt_builder import create_multislide_pptx
+from .ppt_builder import create_multislide_pptx, _safefilename
+from .schemas import PptxRequest
 
 router = APIRouter(prefix="/reports", tags=["PowerPoint"])
 
