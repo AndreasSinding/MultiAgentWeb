@@ -9,7 +9,7 @@ from typing import Dict, Any, Optional
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from dotenv import load_dotenv
-
+from ui.app import router as ppt_router
 
 # --- OPTIONAL: HOT-SWAP SQLITE FOR CHROMA ---
 USE_PYSQLITE3 = os.getenv("USE_PYSQLITE3", "0") == "1"
