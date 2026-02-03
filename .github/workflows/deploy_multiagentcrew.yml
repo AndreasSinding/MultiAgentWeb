@@ -70,7 +70,18 @@ jobs:
       - name: Quick static checks (compile)
         run: |
           python -m compileall -q .
-
+      
+      - name: Sanity import test (routes & ppt builder)
+        run: |
+          python - <<'PY'
+          import importlib
+          # Will raise if names are wrong
+          importlib.import_module('ui.ppt_builder')
+          from ui.ppt_builder import _safe_filename, create_multislide_pptx
+          importlib.import_module('ui.routes_ppt')
+          print("Imports OK")
+          PY
+      
       # No Azure login step here — publish profile auth goes directly to the deploy action.
       - name: Deploy to Azure Web App (source folder → Oryx build on server)
         uses: azure/webapps-deploy@v3
@@ -82,6 +93,7 @@ jobs:
           restart: true
           # NOTE: startup-command is ignored with publish-profile auth; set it in Portal if needed.
           
+
 
 
 
