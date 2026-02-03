@@ -27,6 +27,9 @@ BASE = os.path.dirname(__file__)
 
 app = FastAPI(title="Market Insights – Multi-Agent Crew API")
 
+# include your other routers first if any...
+app.include_router(ppt_router)  # <-- make sure this line exists
+
 # Health
 @app.get("/healthz")
 def healthz():
