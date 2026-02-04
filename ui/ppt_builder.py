@@ -156,7 +156,6 @@ def create_multislide_pptx(result: dict, topic: str, file_name: str = None) -> s
     else:
         tf.text = "No structured sources found."
 
-    # Save
     if not file_name:
         safe_topic = _safe_filename(topic)
         file_name = f"{safe_topic}_report.pptx"
