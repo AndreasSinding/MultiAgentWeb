@@ -46,10 +46,42 @@ def ensure_keys():
 def run_crew_pipeline(topic: str) -> dict:
     ensure_keys()
     state = build_llm_and_crew_once()
+
     if not state["ready"] or state["crew"] is None:
         raise HTTPException(status_code=500, detail=f"Crew not ready: {state['error']}")
+
     crew = state["crew"]
-    result = crew.kickoff({"topic": topic})
+    raw_result = crew.kickoff({"topic": topic})
+
+    # --- BEGIN: enrich result into desired report format ---
+    # Extract summary (model-independent)
+    # If the crew already provides a summary, keep it; otherwise generate a lightweight one.
+    def extract_summary(r: Any) -> str:
+        if isinstance(r, dict) and "summary" in r:
+            return r["summary"]
+
+        # Generate a lightweight bullet summary from task outputs
+        bullets = []
+        if isinstance(r, dict) and "tasks_output" in r:
+            for item in r["tasks_output"]:
+                if isinstance(item, dict) and "content" in item:
+                    line = item["content"].strip().replace("\n", " ")
+                    bullets.append(f"- {line[:200]}...")  # safe truncate
+        return "\n".join(bullets[:7])  # 5–7 punkter
+
+    # Extract tasks output as‑is
+    def extract_tasks(r: Any):
+        if isinstance(r, dict) and "tasks_output" in r:
+            return r["tasks_output"]
+        return [{"raw": r}]
+
+    enriched = {
+        "result": {
+            "summary": extract_summary(raw_result),
+            "tasks_output": extract_tasks(raw_result)
+        }
+    }
+
 
     runs_dir = os.path.join(BASE, "runs")
     os.makedirs(runs_dir, exist_ok=True)
