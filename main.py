@@ -12,6 +12,7 @@ from pydantic import BaseModel
 from dotenv import load_dotenv
 from ui.routes_ppt import router as ppt_router 
 from ui.routes_ppt_from_topic import router as ppt_from_topic_router
+from app.pipeline import build_llm_and_crew_once, warm_async, run_crew_pipe
 
 # --- OPTIONAL: HOT-SWAP SQLITE FOR CHROMA ---
 USE_PYSQLITE3 = os.getenv("USE_PYSQLITE3", "0") == "1"
@@ -27,7 +28,12 @@ if USE_PYSQLITE3:
 load_dotenv(override=True)
 BASE = os.path.dirname(__file__)
 
-app = FastAPI(title="Market Insights – Multi-Agent Crew API")
+#app = FastAPI(title="Market Insights – Multi-Agent Crew API")
+
+app = FastAPI(
+    title="Market Insights – Multi-Agent Crew API",
+    docs_url="/docs",           # make docs explicit
+    redoc_url="/redoc"
 
 app.add_middleware(
     CORSMiddleware,
@@ -40,7 +46,19 @@ app.add_middleware(
 
 # include your other routers first if any...
 #app.include_router(ppt_router)  # <-- make sure this line exists
+#app.include_router(ppt_from_topic_router)
+
+
+#include the routers (make sure the PPT JSON route is also included)
+from ui.routes_ppt import router as ppt_router
+from ui.routes_ppt_from_topic import router as ppt_from_topic_router
+app.include_router(ppt_router)
 app.include_router(ppt_from_topic_router)
+
+@app.on_event("startup")
+def warm_in_background():
+    warm_async()
+    
 
 # Health
 @app.get("/healthz")
@@ -101,16 +119,6 @@ def build_llm_and_crew_once() -> Dict[str, Any]:
         print("Crew init failed:", e)
 
     return CREW_STATE
-
-# Warm-up in background so startup is instant
-@app.on_event("startup")
-def warm_in_background():
-    def _warm():
-        try:
-            build_llm_and_crew_once()
-        except Exception as e:
-            CREW_STATE.update({"ready": False, "error": f"{type(e).__name__}: {e}"})
-    threading.Thread(target=_warm, daemon=True).start()
 
 # Status (never 500)
 @app.get("/status")
