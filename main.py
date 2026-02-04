@@ -7,6 +7,7 @@ import threading
 import inspect
 from typing import Dict, Any, Optional
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from ui.routes_ppt import router as ppt_router 
@@ -26,6 +27,16 @@ load_dotenv(override=True)
 BASE = os.path.dirname(__file__)
 
 app = FastAPI(title="Market Insights – Multi-Agent Crew API")
+
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # tighten for prod
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 
 # include your other routers first if any...
 app.include_router(ppt_router)  # <-- make sure this line exists
