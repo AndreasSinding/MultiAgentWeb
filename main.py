@@ -54,7 +54,7 @@ app.add_middleware(
 from ui.routes_ppt import router as ppt_router
 from ui.routes_ppt_from_topic import router as ppt_from_topic_router
 app.include_router(ppt_router)
-app.include_router(ppt_from_topic_router)
+#app.include_router(ppt_from_topic_router)
 
 @app.on_event("startup")
 def warm_in_background():
