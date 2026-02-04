@@ -3,6 +3,7 @@ from fastapi import APIRouter, BackgroundTasks, Body, HTTPException
 from fastapi.responses import FileResponse
 import os, tempfile, requests
 from .ppt_builder import create_multislide_pptx, _safe_filename
+from app.pipeline import run_crew_pipeline
 
 router = APIRouter(prefix="/reports", tags=["PowerPoint"])
 
