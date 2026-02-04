@@ -120,30 +120,30 @@ def status():
     return {"crew_ready": bool(state.get("ready")), "error": state.get("error")}
 
 # ---------- Pipeline helpers ----------
-def ensure_keys():
-    required = ["GROQ_API_KEY"]  # add OPENAI_API_KEY etc. if needed
-    missing = [k for k in required if not os.getenv(k)]
-    if missing:
-        raise HTTPException(status_code=400, detail=f"Missing environment variables: {', '.join(missing)}")
+#def ensure_keys():
+#    required = ["GROQ_API_KEY"]  # add OPENAI_API_KEY etc. if needed
+#    missing = [k for k in required if not os.getenv(k)]
+#    if missing:
+#        raise HTTPException(status_code=400, detail=f"Missing environment variables: {', '.join(missing)}")
 
-def run_crew_pipeline(topic: str) -> dict:
-    ensure_keys()
-    state = build_llm_and_crew_once()
-    if not state["ready"] or state["crew"] is None:
-        raise HTTPException(status_code=500, detail=f"Crew not ready: {state['error']}")
-    crew = state["crew"]
-    result = crew.kickoff({"topic": topic})
-
-    runs_dir = os.path.join(BASE, "runs")
-    os.makedirs(runs_dir, exist_ok=True)
-    outfile = os.path.join(runs_dir, "latest_output.json")
-    try:
-        with open(outfile, "w", encoding="utf-8") as f:
-            json.dump(result, f, ensure_ascii=False, indent=2)
-    except TypeError:
-        with open(outfile, "w", encoding="utf-8") as f:
-            f.write(str(result))
-    return result
+#def run_crew_pipeline(topic: str) -> dict:
+#    ensure_keys()
+#    state = build_llm_and_crew_once()
+#    if not state["ready"] or state["crew"] is None:
+#        raise HTTPException(status_code=500, detail=f"Crew not ready: {state['error']}")
+#    crew = state["crew"]
+#    result = crew.kickoff({"topic": topic})
+#
+#    runs_dir = os.path.join(BASE, "runs")
+#    os.makedirs(runs_dir, exist_ok=True)
+#    outfile = os.path.join(runs_dir, "latest_output.json")
+#    try:
+#        with open(outfile, "w", encoding="utf-8") as f:
+#            json.dump(result, f, ensure_ascii=False, indent=2)
+#    except TypeError:
+#        with open(outfile, "w", encoding="utf-8") as f:
+#            f.write(str(result))
+#    return result
 
 # ---------- Schemas ----------
 class RunRequest(BaseModel):
