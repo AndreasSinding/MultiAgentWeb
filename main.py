@@ -34,6 +34,7 @@ app = FastAPI(
     title="Market Insights – Multi-Agent Crew API",
     docs_url="/docs",           # make docs explicit
     redoc_url="/redoc"
+)
 
 app.add_middleware(
     CORSMiddleware,
