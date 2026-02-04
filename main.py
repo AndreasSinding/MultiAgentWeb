@@ -12,7 +12,7 @@ from pydantic import BaseModel
 from dotenv import load_dotenv
 from ui.routes_ppt import router as ppt_router 
 from ui.routes_ppt_from_topic import router as ppt_from_topic_router
-from app.pipeline import build_llm_and_crew_once, warm_async, run_crew_pipe
+from app.pipeline import build_llm_and_crew_once, warm_async, run_crew_pipeline
 
 # --- OPTIONAL: HOT-SWAP SQLITE FOR CHROMA ---
 USE_PYSQLITE3 = os.getenv("USE_PYSQLITE3", "0") == "1"
