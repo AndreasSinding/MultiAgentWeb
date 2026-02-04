@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from ui.routes_ppt import router as ppt_router 
+from ui.routes_ppt_from_topic import router as ppt_from_topic_router
 
 # --- OPTIONAL: HOT-SWAP SQLITE FOR CHROMA ---
 USE_PYSQLITE3 = os.getenv("USE_PYSQLITE3", "0") == "1"
@@ -28,7 +29,6 @@ BASE = os.path.dirname(__file__)
 
 app = FastAPI(title="Market Insights – Multi-Agent Crew API")
 
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # tighten for prod
@@ -39,7 +39,8 @@ app.add_middleware(
 
 
 # include your other routers first if any...
-app.include_router(ppt_router)  # <-- make sure this line exists
+#app.include_router(ppt_router)  # <-- make sure this line exists
+app.include_router(ppt_from_topic_router)
 
 # Health
 @app.get("/healthz")
