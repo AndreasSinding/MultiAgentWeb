@@ -337,16 +337,31 @@ def create_multislide_pptx(result: Dict[str, Any], topic: str, file_path: str) -
     slide.shapes.title.text = "Multi‑Agent Insights Report"
     slide.placeholders[1].text = topic
 
-    # ---- Executive summary
-    slide = prs.slides.add_slide(prs.slide_layouts[1])
-    slide.shapes.title.text = "Executive Summary"
-    tf = slide.placeholders[1].text_frame
-    tf.clear()
-    p = tf.paragraphs[0]
-    p.text = summary
-    p.font = p.runs[0].font
-    p.runs[0].font.size = Pt(18)
-    p.runs[0].font.name = "Segoe UI"
+   # --- Executive Summary
+slide = prs.slides.add_slide(prs.slide_layouts[1])
+slide.shapes.title.text = "Executive Summary"
+
+tf = slide.placeholders[1].text_frame
+tf.clear()
+
+p = tf.paragraphs[0]
+p.text = summary or "No summary available."
+
+# --- SAFE FONT STYLING ---
+# Paragraph-level defaults (allowed)
+try:
+    p.font.size = Pt(18)
+    p.font.name = "Segoe UI"
+except Exception:
+    pass
+
+# Ensure all runs get the proper formatting
+for run in p.runs:
+    try:
+        run.font.size = Pt(18)
+        run.font.name = "Segoe UI"
+    except Exception:
+        pass
 
     # ---- Trends
     _add_bullet_slide(prs, "Key Trends", sections.get("trends", [])[:8])
