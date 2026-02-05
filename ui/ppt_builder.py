@@ -75,6 +75,29 @@ def _dedupe_dict_list(items: List[Dict[str, Any]], keys: List[str]) -> List[Dict
             out.append(d)
     return out
 
+_JSON_OBJ = re.compile(r'\{(?:[^{}]|(?R))*\}', re.DOTALL)
+
+def _extract_json_objects(s: str) -> List[Dict[str, Any]]:
+    """Return a list of JSON dicts found anywhere in the string `s`."""
+    objs: List[Dict[str, Any]] = []
+    if not isinstance(s, str):
+        return objs
+    s1 = s.strip()
+    if s1.startswith("{") and s1.endswith("}"):
+        try:
+            obj = json.loads(s1)
+            if isinstance(obj, dict):
+                objs.append(obj)
+        except Exception:
+            pass
+    for m in _JSON_OBJ.finditer(s):
+        try:
+            obj = json.loads(m.group(0))
+            if isinstance(obj, dict):
+                objs.append(obj)
+        except Exception:
+            continue
+    return objs
 
 # -------------------------------------------------------------------
 # JSON normalization and merging
