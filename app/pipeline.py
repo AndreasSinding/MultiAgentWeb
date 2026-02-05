@@ -44,6 +44,8 @@ def ensure_keys():
         raise HTTPException(status_code=400, detail=f"Missing environment variables: {', '.join(missing)}")
 
 def run_crew_pipeline(topic: str) -> dict:
+    import json, os
+    from typing import Any, Iterable
     ensure_keys()
     state = build_llm_and_crew_once()
 
@@ -53,40 +55,130 @@ def run_crew_pipeline(topic: str) -> dict:
     crew = state["crew"]
     raw_result = crew.kickoff({"topic": topic})
 
-    # --- BEGIN: enrich result into desired report format ---
-    def extract_summary(r: Any) -> str:
-        if isinstance(r, dict) and "summary" in r:
-            return r["summary"]
+    # ---------- helpers ----------
+    def _as_list(x: Any) -> Iterable:
+        if x is None:
+            return []
+        if isinstance(x, (list, tuple)):
+            return x
+        return [x]
 
+    def _to_text(x: Any) -> str:
+        """Extract text from any object (dict, custom object, str)."""
+        if x is None:
+            return ""
+        if isinstance(x, str):
+            return x.strip()
+
+        # Common containers: dict
+        if isinstance(x, dict):
+            for key in ("content", "raw", "text", "value", "output"):
+                v = x.get(key)
+                if isinstance(v, str) and v.strip():
+                    return v.strip()
+        else:
+            # Custom objects like CrewOutput(...). Try common attributes.
+            for key in ("content", "raw", "text", "value", "output"):
+                if hasattr(x, key):
+                    v = getattr(x, key)
+                    if isinstance(v, str) and v.strip():
+                        return v.strip()
+
+        # Last resorts
+        try:
+            return json.dumps(x, ensure_ascii=False)
+        except Exception:
+            return str(x)
+
+    def _extract_text_blocks(r: Any) -> list[str]:
+        """
+        Normalize arbitrary crew output to a list[str] of text chunks.
+        Accepts:
+          - str
+          - dict with tasks_output (items may be dicts or custom objects)
+          - dict with raw/content
+          - list/tuple of mixed items
+          - any custom object with .raw/.content etc.
+        """
+        blocks: list[str] = []
+
+        # 1) If top-level has tasks_output
+        if isinstance(r, dict) and "tasks_output" in r:
+            for item in _as_list(r.get("tasks_output", [])):
+                txt = _to_text(item)
+                if txt:
+                    blocks.append(txt)
+
+        # 2) If top-level has raw/content/text/value/output
+        if not blocks and isinstance(r, dict):
+            txt = _to_text(r)
+            if txt:
+                blocks.append(txt)
+
+        # 3) If plain string
+        if not blocks and isinstance(r, str):
+            if r.strip():
+                blocks.append(r.strip())
+
+        # 4) If list/tuple at top level
+        if not blocks and isinstance(r, (list, tuple)):
+            for el in r:
+                txt = _to_text(el)
+                if txt:
+                    blocks.append(txt)
+
+        # 5) If custom object
+        if not blocks:
+            txt = _to_text(r)
+            if txt:
+                blocks.append(txt)
+
+        # ensure at least one block
+        return blocks or [""]
+
+    text_blocks = _extract_text_blocks(raw_result)
+
+    # ---------- summary (use LLM if available, fallback otherwise) ----------
+    llm = state.get("llm")
+    combined_text = "\n\n".join(text_blocks)[:8000]  # keep prompt reasonable
+
+    summary_text = ""
+    if llm:
+        prompt = f"""Summarize the findings BELOW in 5–7 concise bullet points.
+Avoid extra headings or sections—just bullets.
+
+CONTENT START
+{combined_text}
+CONTENT END
+"""
+        try:
+            sr = llm(prompt)
+            summary_text = sr if isinstance(sr, str) else str(sr)
+        except Exception as e:
+            summary_text = f"- Summary generation failed ({type(e).__name__}); using fallback.\n"
+
+    if not summary_text.strip():
         bullets = []
-        if isinstance(r, dict) and "tasks_output" in r:
-            for item in r["tasks_output"]:
-                if isinstance(item, dict) and "content" in item:
-                    line = item["content"].strip().replace("\n", " ")
-                    bullets.append(f"- {line[:200]}...")
-        return "\n".join(bullets[:7])  # max 7 bullets
+        for blk in text_blocks[:7]:
+            first_line = (blk or "").strip().splitlines()[0] if blk else ""
+            if first_line:
+                bullets.append(f"- {first_line[:200]}")
+        summary_text = "\n".join(bullets) if bullets else "- No content available."
 
-    def extract_tasks(r: Any):
-        if isinstance(r, dict) and "tasks_output" in r:
-            return r["tasks_output"]
-        return [{"raw": r}]
+    # ---------- build normalized output ----------
+    tasks_output = [{"content": tb} for tb in text_blocks if tb]
 
-    # This is your actual enriched output
     enriched = {
-        "summary": extract_summary(raw_result),
-        "tasks_output": extract_tasks(raw_result),
+        "summary": summary_text.strip(),
+        "tasks_output": tasks_output,
     }
 
-    # Save to disk
+    # ---------- save JSON safely ----------
     runs_dir = os.path.join(BASE, "runs")
     os.makedirs(runs_dir, exist_ok=True)
-
     outfile = os.path.join(runs_dir, "latest_output.json")
-    try:
-        with open(outfile, "w", encoding="utf-8") as f:
-            json.dump(enriched, f, ensure_ascii=False, indent=2)
-    except TypeError:
-        with open(outfile, "w", encoding="utf-8") as f:
-            f.write(str(enriched))
+    with open(outfile, "w", encoding="utf-8") as f:
+        json.dump(enriched, f, ensure_ascii=False, indent=2)
 
     return enriched
+``
