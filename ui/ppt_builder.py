@@ -75,13 +75,19 @@ def _dedupe_dict_list(items: List[Dict[str, Any]], keys: List[str]) -> List[Dict
             out.append(d)
     return out
 
-_JSON_OBJ = re.compile(r'\{(?:[^{}]|(?R))*\}', re.DOTALL)
+#_JSON_OBJ = re.compile(r'\{(?:[^{}]|(?R))*\}', re.DOTALL)
+
+import json
+import re
+from typing import List, Dict, Any
 
 def _extract_json_objects(s: str) -> List[Dict[str, Any]]:
-    """Return a list of JSON dicts found anywhere in the string `s`."""
-    objs: List[Dict[str, Any]] = []
+    """Extract JSON dicts from string s without recursive regex."""
+    objs = []
     if not isinstance(s, str):
         return objs
+
+    # Try full-string JSON first
     s1 = s.strip()
     if s1.startswith("{") and s1.endswith("}"):
         try:
@@ -90,15 +96,32 @@ def _extract_json_objects(s: str) -> List[Dict[str, Any]]:
                 objs.append(obj)
         except Exception:
             pass
-    for m in _JSON_OBJ.finditer(s):
-        try:
-            obj = json.loads(m.group(0))
-            if isinstance(obj, dict):
-                objs.append(obj)
-        except Exception:
-            continue
-    return objs
 
+    # Fallback: find all {...} blocks (non-recursive but workable)
+    braces = []
+    start = None
+    depth = 0
+
+    for i, ch in enumerate(s):
+        if ch == '{':
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == '}':
+            if depth > 0:
+                depth -= 1
+                if depth == 0 and start is not None:
+                    block = s[start:i+1]
+                    try:
+                        obj = json.loads(block)
+                        if isinstance(obj, dict):
+                            objs.append(obj)
+                    except Exception:
+                        pass
+                    start = None
+
+    return objs
+  
 # -------------------------------------------------------------------
 # JSON normalization and merging
 # -------------------------------------------------------------------
