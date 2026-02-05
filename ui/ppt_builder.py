@@ -310,28 +310,22 @@ def _parse_header_block(text: str) -> Dict[str, Any]:
 def _coalesce_result(result: Dict[str, Any]) -> Dict[str, Any]:
     """
     Merge all task outputs:
-      - Prefer structured JSON blocks found anywhere
-      - Fall back to header blocks
-      - Finally, bulletize any free text as 'trends'
+      - Parse and merge ALL JSON objects found anywhere in tasks/summary blocks
+      - Use header fallback only if at least two distinct headers detected
+      - Finally, bulletize any free text as 'trends' if still empty
     """
-    # unwrap CrewAI style {"result": {...}}
     data = result["result"] if isinstance(result.get("result"), dict) else result
 
-    # collect blocks (strings)
     text_blocks: List[str] = []
     summaries: List[str] = []
 
-    # any explicit summary fields
     for k in ("executive_summary", "summary", "summary_long"):
         v = _strip(data.get(k))
         if v:
             summaries.append(v)
-
-    # 'raw' can contain free text
     if _strip(data.get("raw")):
         summaries.append(_strip(data["raw"]))
 
-    # tasks_output payloads
     for blk in _coerce_list(data.get("tasks_output")):
         if isinstance(blk, dict):
             for key in ("raw", "content", "text"):
@@ -339,35 +333,44 @@ def _coalesce_result(result: Dict[str, Any]) -> Dict[str, Any]:
                 if s:
                     text_blocks.append(s)
 
-    # 1) gather and merge all JSON blocks
     merged = {
         "summary": "",
         "trends": [], "insights": [], "opportunities": [], "risks": [],
         "competitors": [], "numbers": [], "recommendations": [], "sources": []
     }
+
+    # 1) Parse and merge ALL JSON objects from all blocks
     found_any_json = False
     for s in text_blocks + summaries:
-        js = _try_parse_json(s)
-        if js:
+        for obj in _extract_json_objects(s):
             found_any_json = True
-            _merge_struct_into(merged, _normalize_struct(js))
+            _merge_struct_into(merged, _normalize_struct(obj))
 
-    # 2) header fallback (merge as well)
+    # 2) Header fallback only if we truly detect headers
     combined = "\n\n".join(summaries + text_blocks).strip()
-    if combined:
+    def _count_headers(txt: str) -> int:
+        cnt = 0
+        up = txt.upper()
+        for h in HEADER_KEYS:
+            # require header + colon somewhere
+            if (h + ":") in up:
+                cnt += 1
+        return cnt
+
+    if combined and _count_headers(combined) >= 2:
         hdr = _parse_header_block(combined)
         _merge_struct_into(merged, hdr)
 
-    # 3) final fallbacks
+    # 3) Final fallbacks
     if not merged["summary"]:
         merged["summary"] = _strip(" ".join(summaries)) or "No summary available."
+
     if not any(merged[k] for k in ("trends", "insights", "opportunities", "risks",
                                    "competitors", "numbers", "recommendations", "sources")):
-        # bulletize summary as trends fallback
         lines = [ln.strip("-• \t ") for ln in merged["summary"].split("\n") if ln.strip()]
         merged["trends"] = lines[:8]
 
-    # trim lengths to keep slides readable
+    # trim for readability
     merged["trends"] = merged["trends"][:10]
     merged["insights"] = merged["insights"][:10]
     merged["opportunities"] = merged["opportunities"][:10]
