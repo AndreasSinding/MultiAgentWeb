@@ -54,42 +54,39 @@ def run_crew_pipeline(topic: str) -> dict:
     raw_result = crew.kickoff({"topic": topic})
 
     # --- BEGIN: enrich result into desired report format ---
-    # Extract summary (model-independent)
-    # If the crew already provides a summary, keep it; otherwise generate a lightweight one.
     def extract_summary(r: Any) -> str:
         if isinstance(r, dict) and "summary" in r:
             return r["summary"]
 
-        # Generate a lightweight bullet summary from task outputs
         bullets = []
         if isinstance(r, dict) and "tasks_output" in r:
             for item in r["tasks_output"]:
                 if isinstance(item, dict) and "content" in item:
                     line = item["content"].strip().replace("\n", " ")
-                    bullets.append(f"- {line[:200]}...")  # safe truncate
-        return "\n".join(bullets[:7])  # 5–7 punkter
+                    bullets.append(f"- {line[:200]}...")
+        return "\n".join(bullets[:7])  # max 7 bullets
 
-    # Extract tasks output as‑is
     def extract_tasks(r: Any):
         if isinstance(r, dict) and "tasks_output" in r:
             return r["tasks_output"]
         return [{"raw": r}]
 
+    # This is your actual enriched output
     enriched = {
-        "result": {
-            "summary": extract_summary(raw_result),
-            "tasks_output": extract_tasks(raw_result)
-        }
+        "summary": extract_summary(raw_result),
+        "tasks_output": extract_tasks(raw_result),
     }
 
-
+    # Save to disk
     runs_dir = os.path.join(BASE, "runs")
     os.makedirs(runs_dir, exist_ok=True)
+
     outfile = os.path.join(runs_dir, "latest_output.json")
     try:
         with open(outfile, "w", encoding="utf-8") as f:
-            json.dump(result, f, ensure_ascii=False, indent=2)
+            json.dump(enriched, f, ensure_ascii=False, indent=2)
     except TypeError:
         with open(outfile, "w", encoding="utf-8") as f:
-            f.write(str(result))
-    return result
+            f.write(str(enriched))
+
+    return enriched
