@@ -44,10 +44,7 @@ def ensure_keys():
         raise HTTPException(status_code=400, detail=f"Missing environment variables: {', '.join(missing)}")
 
 def run_crew_pipeline(topic: str) -> dict:
-    import json
-    import os
-    from typing import Any, Iterable
-
+    import json, os
     ensure_keys()
     state = build_llm_and_crew_once()
 
@@ -55,125 +52,46 @@ def run_crew_pipeline(topic: str) -> dict:
         raise HTTPException(status_code=500, detail=f"Crew not ready: {state['error']}")
 
     crew = state["crew"]
+
+    # ---- 1) Run CrewAI ----
     raw_result = crew.kickoff({"topic": topic})
 
-    # ---------- helpers ----------
-    def _as_list(x: Any) -> Iterable:
-        if x is None:
-            return []
-        if isinstance(x, (list, tuple)):
-            return x
-        return [x]
+    # CrewAI usually returns a single long string
+    if not isinstance(raw_result, str):
+        raw_text = str(raw_result)
+    else:
+        raw_text = raw_result.strip()
 
-    def _to_text(x: Any) -> str:
-        """Extract a reasonable text from dicts, custom objects, or strings."""
-        if x is None:
-            return ""
-        if isinstance(x, str):
-            return x.strip()
+    # ---- 2) Split text into blocks for tasks_output ----
+    paragraphs = [p.strip() for p in raw_text.split("\n") if p.strip()]
+    tasks_output = [{"content": p} for p in paragraphs]
 
-        # dict → prefer these keys
-        if isinstance(x, dict):
-            for key in ("content", "raw", "text", "value", "output"):
-                v = x.get(key)
-                if isinstance(v, str) and v.strip():
-                    return v.strip()
-        else:
-            # custom object → look for attrs
-            for key in ("content", "raw", "text", "value", "output"):
-                if hasattr(x, key):
-                    v = getattr(x, key)
-                    if isinstance(v, str) and v.strip():
-                        return v.strip()
-
-        # last resort: stringify
-        try:
-            return json.dumps(x, ensure_ascii=False)
-        except Exception:
-            return str(x)
-
-    def _extract_text_blocks(r: Any) -> list[str]:
-        """
-        Normalize arbitrary crew output to a list[str] of text chunks.
-        Handles:
-          - str
-          - dict with tasks_output (items dict/custom/str)
-          - dict with raw/content/text/value/output
-          - list/tuple of mixed items
-          - custom objects
-        """
-        blocks: list[str] = []
-
-        # 1) tasks_output at top-level
-        if isinstance(r, dict) and "tasks_output" in r:
-            for item in _as_list(r.get("tasks_output", [])):
-                txt = _to_text(item)
-                if txt:
-                    blocks.append(txt)
-
-        # 2) raw/content/text at top-level dict
-        if not blocks and isinstance(r, dict):
-            txt = _to_text(r)
-            if txt:
-                blocks.append(txt)
-
-        # 3) plain string
-        if not blocks and isinstance(r, str) and r.strip():
-            blocks.append(r.strip())
-
-        # 4) top-level list
-        if not blocks and isinstance(r, (list, tuple)):
-            for el in r:
-                txt = _to_text(el)
-                if txt:
-                    blocks.append(txt)
-
-        # 5) custom object
-        if not blocks:
-            txt = _to_text(r)
-            if txt:
-                blocks.append(txt)
-
-        return blocks or [""]
-
-    text_blocks = _extract_text_blocks(raw_result)
-
-    # ---------- summary via LLM → fallback ----------
+    # ---- 3) Create summary via LLM ----
     llm = state.get("llm")
-    combined_text = "\n\n".join(text_blocks)[:8000]  # keep prompt reasonable
-    summary_text = ""
     if llm:
         prompt = (
-            "Summarize the findings BELOW in 5–7 concise bullet points.\n"
-            "Avoid headings—only bullets.\n\n"
-            "CONTENT START\n"
-            f"{combined_text}\n"
-            "CONTENT END\n"
+            "Summarize the following text (from a multi-agent research pipeline) in exactly 5–7 bullets.\n"
+            "Avoid headings. Only bullet points.\n\n"
+            f"TEXT:\n{raw_text}\n"
         )
         try:
-            sr = llm(prompt)
-            summary_text = sr if isinstance(sr, str) else str(sr)
+            summary = llm(prompt)
+            summary = summary if isinstance(summary, str) else str(summary)
         except Exception:
-            summary_text = ""
+            summary = None
+    else:
+        summary = None
 
-    if not summary_text.strip():
-        bullets = []
-        # Try to pick meaningful first lines from the blocks
-        for blk in text_blocks[:7]:
-            line = (blk or "").strip().splitlines()[0]
-            if line:
-                bullets.append(f"- {line[:200]}")
-        summary_text = "\n".join(bullets) if bullets else "- No content available."
-
-    # ---------- normalized output ----------
-    tasks_output = [{"content": tb} for tb in text_blocks if tb]
+    # Fallback if LLM summary fails
+    if not summary or not summary.strip():
+        summary = "\n".join([f"- {p[:200]}" for p in paragraphs[:7]])
 
     enriched = {
-        "summary": summary_text.strip(),
-        "tasks_output": tasks_output,
+        "summary": summary.strip(),
+        "tasks_output": tasks_output
     }
 
-    # ---------- save valid JSON ----------
+    # ---- 4) Save to disk for /latest ----
     runs_dir = os.path.join(BASE, "runs")
     os.makedirs(runs_dir, exist_ok=True)
     outfile = os.path.join(runs_dir, "latest_output.json")
