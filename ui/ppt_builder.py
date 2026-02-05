@@ -75,19 +75,16 @@ def _dedupe_dict_list(items: List[Dict[str, Any]], keys: List[str]) -> List[Dict
             out.append(d)
     return out
 
-#_JSON_OBJ = re.compile(r'\{(?:[^{}]|(?R))*\}', re.DOTALL)
-
 import json
-import re
 from typing import List, Dict, Any
 
 def _extract_json_objects(s: str) -> List[Dict[str, Any]]:
-    """Extract JSON dicts from string s without recursive regex."""
-    objs = []
+    """Extract JSON dicts from string s without recursive regex (Python-native)."""
+    objs: List[Dict[str, Any]] = []
     if not isinstance(s, str):
         return objs
 
-    # Try full-string JSON first
+    # Try full-string JSON first.
     s1 = s.strip()
     if s1.startswith("{") and s1.endswith("}"):
         try:
@@ -97,11 +94,9 @@ def _extract_json_objects(s: str) -> List[Dict[str, Any]]:
         except Exception:
             pass
 
-    # Fallback: find all {...} blocks (non-recursive but workable)
-    braces = []
+    # Fallback: scan for {...} blocks using a brace counter.
     start = None
     depth = 0
-
     for i, ch in enumerate(s):
         if ch == '{':
             if depth == 0:
@@ -119,7 +114,6 @@ def _extract_json_objects(s: str) -> List[Dict[str, Any]]:
                     except Exception:
                         pass
                     start = None
-
     return objs
   
 # -------------------------------------------------------------------
