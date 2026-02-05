@@ -5,159 +5,152 @@ from pptx import Presentation
 from pptx.util import Inches, Pt
 
 def _safe_filename(base: str) -> str:
-    # Windows-safe filename
     safe = re.sub(r"[^A-Za-z0-9._-]+", "_", base).strip("_")
     return safe or "report"
 
-def create_multislide_pptx(result: dict, topic: str, file_name: str = None) -> str:
+
+# -------------------------------------------------------------------
+# TEXT->LIST HELPERS (lightweight NLP)
+# -------------------------------------------------------------------
+
+def extract_bullets_from_text(text: str, max_items=8):
+    """Convert a block of text into easy PPT bullet points."""
+    if not text:
+        return []
+
+    lines = re.split(r"[\n•\-]+", text)
+    lines = [l.strip() for l in lines if l.strip()]
+    return lines[:max_items]
+
+
+def extract_sections(tasks_output):
     """
-    Builds a multi-slide PPTX from the MultiAgent result JSON.
-    Uses:
-      - Executive summary from result.result.raw (fallback if summary absent)
-      - Structured arrays (trends/competitors/numbers/sources) parsed from tasks_output[0].raw when present
-      - Recommendations parsed from any tasks_output containing a JSON with "recommendations"
+    For each slide type, search the task content for keywords.
+    This works even if your LLM output is messy or unstructured.
     """
-    data = result.get("result", {})  # {"raw": "...", "tasks_output": [...] , ...}
 
-    # Executive summary (fallback to 'raw')
-    exec_summary = data.get("summary") or data.get("raw") or "Ingen oppsummering tilgjengelig"
+    combined = "\n".join(
+        item.get("content", "") for item in tasks_output if isinstance(item, dict)
+    )
 
-    # Try to parse the structured 'research' JSON (trends/competitors/numbers/sources)
-    research = None
-    for block in data.get("tasks_output", []):
-        raw = block.get("raw")
-        if isinstance(raw, str):
-            raw_str = raw.strip()
-            if raw_str.startswith("{") and raw_str.endswith("}"):
-                try:
-                    research = json.loads(raw_str)
-                    break
-                except Exception:
-                    pass
+    def find_section(keyword):
+        pattern = rf"{keyword}[:\-]\s*(.+?)(?=\n[A-Z][a-z]|$)"
+        match = re.search(pattern, combined, flags=re.IGNORECASE | re.DOTALL)
+        return match.group(1).strip() if match else ""
 
-    trends_list = research.get("trends", []) if research else []
-    competitors = research.get("competitors", []) if research else []
-    numbers = research.get("numbers", []) if research else []
-    sources = research.get("sources", []) if research else []
+    return {
+        "trends": extract_bullets_from_text(find_section("trend")),
+        "competitors": extract_bullets_from_text(find_section("competitor")),
+        "numbers": extract_bullets_from_text(find_section("number")),
+        "recommendations": extract_bullets_from_text(find_section("recommendation")),
+        "sources": extract_bullets_from_text(find_section("source"), max_items=12),
+    }
 
-    # Recommendations (from any JSON containing "recommendations")
-    recs = []
-    for block in data.get("tasks_output", []):
-        raw = block.get("raw")
-        if isinstance(raw, str):
-            raw_str = raw.strip()
-            if raw_str.startswith("{") and '"recommendations"' in raw_str:
-                try:
-                    analysis = json.loads(raw_str)
-                    recs = analysis.get("recommendations", [])
-                    break
-                except Exception:
-                    pass
 
-    prs = Presentation()  # blank deck
+# -------------------------------------------------------------------
+# GENERATOR
+# -------------------------------------------------------------------
 
-    # --- Title slide
+def create_multislide_pptx(result: dict, topic: str, file_path: str) -> str:
+    """
+    NEW VERSION:
+        • Uses pipeline's new enriched structure
+        • Extracts information directly from 'summary' + 'tasks_output'
+        • No structured JSON required
+    """
+
+    summary = result.get("summary") or "No summary available."
+    tasks_output = result.get("tasks_output", [])
+
+    sections = extract_sections(tasks_output)
+
+    prs = Presentation()
+
+    # -------- Slide 1 — Title --------
     slide = prs.slides.add_slide(prs.slide_layouts[0])
-    slide.shapes.title.text = "MultiAgent Report"
+    slide.shapes.title.text = "Multi‑Agent Insights Report"
     slide.placeholders[1].text = topic
 
-    # --- Executive Summary
+    # -------- Slide 2 — Executive Summary --------
     slide = prs.slides.add_slide(prs.slide_layouts[1])
     slide.shapes.title.text = "Executive Summary"
     tf = slide.placeholders[1].text_frame
     tf.clear()
-    p = tf.paragraphs[0]
-    p.text = exec_summary
-    p.level = 0
 
-    # --- Trends
+    for i, line in enumerate(extract_bullets_from_text(summary)):
+        p = tf.paragraphs[0] if i == 0 else tf.add_paragraph()
+        p.text = line
+        p.level = 0
+
+    # -------- Slide 3 — Key Trends --------
     slide = prs.slides.add_slide(prs.slide_layouts[1])
     slide.shapes.title.text = "Key Trends"
     tf = slide.placeholders[1].text_frame
     tf.clear()
-    if trends_list:
-        for i, t in enumerate(trends_list[:6]):
+
+    trends = sections["trends"]
+    if trends:
+        for i, t in enumerate(trends):
             p = tf.paragraphs[0] if i == 0 else tf.add_paragraph()
-            title = t.get("title", "")
-            evidence = t.get("evidence", "")
-            why = t.get("why_it_matters", "")
-            p.text = f"{title} — {evidence}. Why: {why}"
-            p.level = 0
+            p.text = t
     else:
-        tf.text = "No structured trends found."
+        tf.text = "No trends identified."
 
-    # --- Competitors (table)
-    slide = prs.slides.add_slide(prs.slide_layouts[5])  # Title Only
-    slide.shapes.title.text = "Competitors / Actors"
-    left, top, width, height = Inches(0.5), Inches(1.5), Inches(9.0), Inches(1.0)
-    rows = min(1 + max(1, len(competitors)), 1 + 10)  # header + up to 10
-    table = slide.shapes.add_table(rows, 3, left, top, width, height).table
-    headers = ["Name", "Position", "Notes"]
-    for j, h in enumerate(headers):
-        cell = table.cell(0, j)
-        cell.text = h
-        for para in cell.text_frame.paragraphs:
-            para.font.bold = True
-            para.font.size = Pt(14)
-    if competitors:
-        for i, comp in enumerate(competitors[: rows - 1], start=1):
-            table.cell(i, 0).text = comp.get("name", "")
-            table.cell(i, 1).text = comp.get("position", "")
-            table.cell(i, 2).text = comp.get("notes", "")
-    else:
-        if rows >= 2:
-            table.cell(1, 0).text = "No structured competitors found"
-
-    # --- Numbers (table)
-    slide = prs.slides.add_slide(prs.slide_layouts[5])  # Title Only
-    slide.shapes.title.text = "Key Numbers"
-    left, top, width, height = Inches(0.5), Inches(1.5), Inches(9.0), Inches(1.0)
-    rows = min(1 + max(1, len(numbers)), 1 + 12)
-    table = slide.shapes.add_table(rows, 3, left, top, width, height).table
-    headers = ["Metric", "Value", "Source"]
-    for j, h in enumerate(headers):
-        cell = table.cell(0, j)
-        cell.text = h
-        for para in cell.text_frame.paragraphs:
-            para.font.bold = True
-            para.font.size = Pt(14)
-    if numbers:
-        for i, n in enumerate(numbers[: rows - 1], start=1):
-            table.cell(i, 0).text = n.get("metric", "")
-            table.cell(i, 1).text = n.get("value", "")
-            table.cell(i, 2).text = n.get("source", "")
-    else:
-        if rows >= 2:
-            table.cell(1, 0).text = "No structured numbers found"
-
-    # --- Recommendations (Top 5)
+    # -------- Slide 4 — Competitors --------
     slide = prs.slides.add_slide(prs.slide_layouts[1])
-    slide.shapes.title.text = "Recommendations (Top 5)"
+    slide.shapes.title.text = "Competitors / Actors"
     tf = slide.placeholders[1].text_frame
     tf.clear()
+
+    comps = sections["competitors"]
+    if comps:
+        for i, c in enumerate(comps):
+            p = tf.paragraphs[0] if i == 0 else tf.add_paragraph()
+            p.text = c
+    else:
+        tf.text = "No competitors identified."
+
+    # -------- Slide 5 — Key Numbers --------
+    slide = prs.slides.add_slide(prs.slide_layouts[1])
+    slide.shapes.title.text = "Key Numbers"
+    tf = slide.placeholders[1].text_frame
+    tf.clear()
+
+    numbers = sections["numbers"]
+    if numbers:
+        for i, n in enumerate(numbers):
+            p = tf.paragraphs[0] if i == 0 else tf.add_paragraph()
+            p.text = n
+    else:
+        tf.text = "No numerical insights identified."
+
+    # -------- Slide 6 — Recommendations --------
+    slide = prs.slides.add_slide(prs.slide_layouts[1])
+    slide.shapes.title.text = "Recommendations"
+    tf = slide.placeholders[1].text_frame
+    tf.clear()
+
+    recs = sections["recommendations"]
     if recs:
         for i, r in enumerate(recs[:5]):
             p = tf.paragraphs[0] if i == 0 else tf.add_paragraph()
-            p.text = f"{r.get('priority', i+1)}) {r.get('action','')} — Why: {r.get('rationale','')}"
-            p.level = 0
+            p.text = r
     else:
-        tf.text = "No structured recommendations found."
+        tf.text = "No recommendations extracted."
 
-    # --- Sources
+    # -------- Slide 7 — Sources --------
     slide = prs.slides.add_slide(prs.slide_layouts[1])
     slide.shapes.title.text = "Sources"
     tf = slide.placeholders[1].text_frame
     tf.clear()
-    if sources:
-        for i, s in enumerate(sources[:12]):
-            p = tf.paragraphs[0] if i == 0 else tf.add_paragraph()
-            p.text = str(s)
-            p.level = 0
-    else:
-        tf.text = "No structured sources found."
 
-    if not file_name:
-        safe_topic = _safe_filename(topic)
-        file_name = f"{safe_topic}_report.pptx"
-    prs.save(file_name)
-    return file_name
+    srcs = sections["sources"]
+    if srcs:
+        for i, s in enumerate(srcs):
+            p = tf.paragraphs[0] if i == 0 else tf.add_paragraph()
+            p.text = s
+    else:
+        tf.text = "No sources referenced."
+
+    prs.save(file_path)
+    return file_path
