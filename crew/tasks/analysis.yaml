@@ -6,6 +6,19 @@ task:
     Identifiser innsikt, muligheter, risiko og 1-5 prioriterte anbefalinger.
     Svar kort og konkret
   agent: Market Analyst
+  
   expected_output: >
     Analytisk vurdering med konkrete anbefalinger.
+    Lever KUN gyldig JSON. Ingen annen tekst er tillatt.
+      Format:
+      {
+        "insights": ["", "", ""],
+        "opportunities": ["", "", ""],
+        "risks": ["", "", ""],
+        "recommendations": [
+          {"priority": 1, "action": "", "rationale": ""},
+          ...
+        ]
+      }
+      
   output_schema: AnalysisOutput
