@@ -45,32 +45,29 @@ def ensure_keys():
 
 def run_crew_pipeline(topic: str) -> dict:
     import json, os
+
     ensure_keys()
     state = build_llm_and_crew_once()
-
     if not state["ready"] or state["crew"] is None:
         raise HTTPException(status_code=500, detail=f"Crew not ready: {state['error']}")
 
     crew = state["crew"]
 
-    # ---- 1) Run CrewAI ----
+    # 1) Run CrewAI
     raw_result = crew.kickoff({"topic": topic})
+    raw_text = raw_result if isinstance(raw_result, str) else str(raw_result)
+    raw_text = raw_text.strip()
 
-    # CrewAI usually returns a single long string
-    if not isinstance(raw_result, str):
-        raw_text = str(raw_result)
-    else:
-        raw_text = raw_result.strip()
-
-    # ---- New version, do not Split text into blocks for tasks_output ----
+    # 2) DO NOT split by newline (keeps JSON blocks intact for extractor)
     tasks_output = [{"content": raw_text}]
 
-    # ---- 3) Create summary via LLM ----
+    # 3) Create summary via LLM (same as before)
     llm = state.get("llm")
+    summary = None
     if llm:
         prompt = (
-            "Summarize the following text (from a multi-agent research pipeline) in exactly 5–7 bullets.\n"
-            "Avoid headings. Only bullet points.\n\n"
+            "Summarize the following text (from a multi-agent research pipeline) "
+            "in exactly 5–7 bullets.\nAvoid headings. Only bullet points.\n\n"
             f"TEXT:\n{raw_text}\n"
         )
         try:
@@ -78,19 +75,18 @@ def run_crew_pipeline(topic: str) -> dict:
             summary = summary if isinstance(summary, str) else str(summary)
         except Exception:
             summary = None
-    else:
-        summary = None
 
-    # Fallback if LLM summary fails
+    # 4) Fallback summary if LLM fails — use raw_text lines (NOT 'paragraphs')
     if not summary or not summary.strip():
-        summary = "\n".join([f"- {p[:200]}" for p in paragraphs[:7]])
+        first_lines = [ln.strip() for ln in raw_text.splitlines() if ln.strip()]
+        summary = "\n".join([f"- {ln[:200]}" for ln in first_lines[:7]]) or "- (no summary)"
 
     enriched = {
         "summary": summary.strip(),
         "tasks_output": tasks_output
     }
 
-    # ---- 4) Save to disk for /latest ----
+    # 5) Save to disk for /latest
     runs_dir = os.path.join(BASE, "runs")
     os.makedirs(runs_dir, exist_ok=True)
     outfile = os.path.join(runs_dir, "latest_output.json")
