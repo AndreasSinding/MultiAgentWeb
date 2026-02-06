@@ -34,6 +34,23 @@ from pptx.enum.text import PP_ALIGN
 
 
 # ---------------------------------------------------------------------------
+# JSON sanitizer (IMPORTANT!)
+# ---------------------------------------------------------------------------
+
+def _preclean_near_json(s: str) -> str:
+    """Clean markdown bullets, code fences, and stray formatting before JSON parsing."""
+    import re
+    if not isinstance(s, str):
+        return ""
+    s = s.strip()
+    # remove code fences like ```json or ```
+    s = re.sub(r"^```(?:json)?\s*|\s*```$", "", s, flags=re.I|re.M).strip()
+    # remove leading "-" or "*" bullets
+    lines = [re.sub(r"^\s*[-*]\s+","", ln) for ln in s.splitlines()]
+    return "\n".join(lines).strip()
+
+
+# ---------------------------------------------------------------------------
 # Utility helpers
 # ---------------------------------------------------------------------------
 
@@ -70,14 +87,14 @@ def _style_paragraph(p, size_pt: int = 18, font: str = "Segoe UI"):
 
 
 # ---------------------------------------------------------------------------
-# JSON extraction (Option A2: soft fallback)
+# JSON extraction (Option A2: strict-first, fallback second)
 # ---------------------------------------------------------------------------
 
 def _extract_all_json_blocks(tasks_output: List[Dict[str, Any]]) -> Dict[str, Any]:
     """
     Extract ALL valid JSON dicts from tasks_output[*].raw/content/text.
     Merge them into one data structure.
-    Missing sections -> empty lists (Option A2).
+    Missing sections -> empty lists (A2).
     """
 
     merged = {
@@ -97,9 +114,9 @@ def _extract_all_json_blocks(tasks_output: List[Dict[str, Any]]) -> Dict[str, An
             s = blk.get(key)
             if not isinstance(s, str):
                 continue
+            ss = _preclean_near_json(s.strip())
 
-            ss = s.strip()
-            # Full-string JSON block
+            # STRICT JSON BLOCK: whole string is JSON
             if ss.startswith("{") and ss.endswith("}"):
                 try:
                     obj = json.loads(ss)
@@ -108,7 +125,7 @@ def _extract_all_json_blocks(tasks_output: List[Dict[str, Any]]) -> Dict[str, An
                 except Exception:
                     pass
 
-            # Fallback brace-scan for embedded JSON
+            # FALLBACK: embedded { ... } blocks
             for obj in _brace_scan_json(ss):
                 _merge_json_into(merged, obj)
 
@@ -116,23 +133,20 @@ def _extract_all_json_blocks(tasks_output: List[Dict[str, Any]]) -> Dict[str, An
 
 
 def _brace_scan_json(text: str) -> List[Dict[str, Any]]:
-    """
-    Extract {...} blocks using brace counting.
-    Safe for LLM outputs.
-    """
+    """Extract { ... } blocks using brace depth scanning."""
     objs = []
     depth = 0
     start = None
 
     for i, ch in enumerate(text):
-        if ch == '{':
+        if ch == "{":
             if depth == 0:
                 start = i
             depth += 1
-        elif ch == '}':
+        elif ch == "}":
             depth -= 1
             if depth == 0 and start is not None:
-                block = text[start:i+1]
+                block = text[start : i + 1]
                 try:
                     obj = json.loads(block)
                     if isinstance(obj, dict):
@@ -149,50 +163,49 @@ def _brace_scan_json(text: str) -> List[Dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 def _merge_json_into(merged: Dict[str, Any], obj: Dict[str, Any]) -> None:
-    """
-    Merge a JSON dict from an agent into the master structure.
-    Missing keys are ignored (A2 soft fallback).
-    """
+    """Merge JSON dict from agent into main structure."""
 
-    # Summary
+    # Summary (prefer longest)
     if "summary" in obj:
         s = _strip(obj.get("summary"))
         if s and len(s) > len(merged["summary"]):
             merged["summary"] = s
 
-    # Simple lists
+    # Simple list fields
     for key in ("trends", "insights", "opportunities", "risks", "sources"):
         for item in _coerce_list(obj.get(key)):
             s = _strip(item)
             if s and s not in merged[key]:
                 merged[key].append(s)
 
-    # Table-like lists
+    # Competitors
     if "competitors" in obj:
         for comp in _coerce_list(obj.get("competitors")):
             if isinstance(comp, dict):
                 merged["competitors"].append({
                     "name": _strip(comp.get("name")),
                     "position": _strip(comp.get("position")),
-                    "notes": _strip(comp.get("notes"))
+                    "notes": _strip(comp.get("notes")),
                 })
 
+    # Numbers
     if "numbers" in obj:
         for n in _coerce_list(obj.get("numbers")):
             if isinstance(n, dict):
                 merged["numbers"].append({
                     "metric": _strip(n.get("metric")),
                     "value": _strip(n.get("value")),
-                    "source": _strip(n.get("source"))
+                    "source": _strip(n.get("source")),
                 })
 
+    # Recommendations
     if "recommendations" in obj:
         for r in _coerce_list(obj.get("recommendations")):
             if isinstance(r, dict):
                 merged["recommendations"].append({
                     "priority": r.get("priority"),
                     "action": _strip(r.get("action")),
-                    "rationale": _strip(r.get("rationale"))
+                    "rationale": _strip(r.get("rationale")),
                 })
 
 
@@ -227,7 +240,7 @@ def _add_table_slide(prs, title: str, headers: List[str], rows: List[List[str]])
 
     table = slide.shapes.add_table(n_rows, n_cols, left, top, width, height).table
 
-    # Header row
+    # Header
     for j, h in enumerate(headers):
         cell = table.cell(0, j)
         cell.text = h
@@ -236,7 +249,7 @@ def _add_table_slide(prs, title: str, headers: List[str], rows: List[List[str]])
             p.font.size = Pt(14)
             p.alignment = PP_ALIGN.LEFT
 
-    # Data
+    # Rows
     if rows:
         for i, r in enumerate(rows[: n_rows - 1], start=1):
             for j in range(n_cols):
@@ -253,16 +266,12 @@ def _add_table_slide(prs, title: str, headers: List[str], rows: List[List[str]])
 # ---------------------------------------------------------------------------
 
 def create_multislide_pptx(result: Dict[str, Any], topic: str, file_path: str) -> str:
-    """
-    Build the full 10-slide deck from JSON-only agent output (Option A + A2).
-    """
+    """Build the full 10-slide deck."""
     data = result.get("result", {})
     tasks_output = data.get("tasks_output", [])
 
-    # 🔥 Extract ALL JSON blocks (strict JSON-first, soft fallback)
     sections = _extract_all_json_blocks(tasks_output)
 
-    # Ensure summary exists
     if not sections["summary"]:
         sections["summary"] = _strip(data.get("summary")) or "No summary available."
 
@@ -282,42 +291,34 @@ def create_multislide_pptx(result: Dict[str, Any], topic: str, file_path: str) -
     p.text = sections["summary"]
     _style_paragraph(p, size_pt=18)
 
-    # 3) Key Trends
+    # 3–10 slides:
     _add_bullet_slide(prs, "Key Trends", sections["trends"])
-
-    # 4) Market Insights
     _add_bullet_slide(prs, "Market Insights", sections["insights"])
-
-    # 5) Opportunities
     _add_bullet_slide(prs, "Opportunities", sections["opportunities"])
-
-    # 6) Risks
     _add_bullet_slide(prs, "Risks", sections["risks"])
 
-    # 7) Competitors (table)
     comp_rows = [
         [_strip(c.get("name")), _strip(c.get("position")), _strip(c.get("notes"))]
         for c in sections["competitors"]
     ]
-    _add_table_slide(prs, "Competitors / Actors", ["Name", "Position", "Notes"], comp_rows)
+    _add_table_slide(prs, "Competitors / Actors",
+                     ["Name", "Position", "Notes"], comp_rows)
 
-    # 8) Key Numbers (table)
     num_rows = [
         [_strip(n.get("metric")), _strip(n.get("value")), _strip(n.get("source"))]
         for n in sections["numbers"]
     ]
-    _add_table_slide(prs, "Key Numbers", ["Metric", "Value", "Source"], num_rows)
+    _add_table_slide(prs, "Key Numbers",
+                     ["Metric", "Value", "Source"], num_rows)
 
-    # 9) Recommendations
     rec_lines = []
     for r in sections["recommendations"]:
         pr = r.get("priority")
-        pr_str = f"{pr}) " if isinstance(pr, int) else ""
-        line = f"{pr_str}{_strip(r.get('action'))} — Why: {_strip(r.get('rationale'))}".strip(" —")
+        prefix = f"{pr}) " if isinstance(pr, int) else ""
+        line = f"{prefix}{_strip(r.get('action'))} — Why: {_strip(r.get('rationale'))}"
         rec_lines.append(line)
     _add_bullet_slide(prs, "Recommendations", rec_lines)
 
-    # 10) Sources
     _add_bullet_slide(prs, "Sources", sections["sources"], size=16)
 
     prs.save(file_path)
