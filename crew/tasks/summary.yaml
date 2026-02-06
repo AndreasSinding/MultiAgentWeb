@@ -7,4 +7,10 @@ task:
   agent: Executive Summarizer
   expected_output: >
     Kort ledersammendrag (maks ~300–400 ord) med anbefalinger og kilder.
+    Lever KUN gyldig JSON.Ingen annen tekst er tillatt.
+      Format:
+      {
+        "summary": "Kortfattet ledersammendrag (maks 300 ord)"
+      }
+
   # Free-form text output, no schema here (defaults to string)
