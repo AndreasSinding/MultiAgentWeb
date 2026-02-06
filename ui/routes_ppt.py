@@ -32,7 +32,7 @@ async def generate_pptx(
         tmp_path = tmp.name
 
     try:
-        create_multislide_pptx(enriched, topic, tmp_path)
+        create_multislide_pptx({"result": enriched}, topic, tmp_path)
     except Exception as e:
         raise HTTPException(500, f"PPT generation failed: {type(e).__name__}: {e}")
 
