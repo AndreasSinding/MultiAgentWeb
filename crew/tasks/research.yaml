@@ -3,8 +3,37 @@ task:
   name: Research Task
   description: >
     Gjør nett-research på {topic}.
-    Lever KUN kompakt JSON med maks 3 trender, 3 aktører og 5 kilder/tall.
+    Lever KUN gyldig og kompakt JSON. Ingen annen tekst er tillatt. Med maks 3 trender, 3 aktører og 5 kilder/tall.
     Vær spesifikk og presis; prioriter ferske artikler/rapporter.
+    expected_output: >
+  Lever KUN gyldig JSON. Ingen tekst før eller etter JSON.
+  Format:
+  {
+    "trends": [
+      {"title": "", "evidence": "", "why_it_matters": ""},
+      ...
+    ],
+    "competitors": [
+      {"name": "", "position": "", "notes": ""},
+      ...
+    ],
+    "numbers": [
+      {"metric": "", "value": "", "source": ""},
+      ...
+    ],
+    "sources": [
+      "Kilde 1",
+      "Kilde 2"
+    ]
+  }
+
+  Krav:
+  - Ingen markdown.
+  - Ingen forklarende tekst.
+  - Ingen bullets.
+  - Ingen ```json blokker.
+  - KUN ren JSON, valid gjennom JSON.parse.
+  
   agent: Market Researcher
   expected_output: >
     Strukturert research med trender, aktører, tall og kilder.
