@@ -62,9 +62,8 @@ def run_crew_pipeline(topic: str) -> dict:
     else:
         raw_text = raw_result.strip()
 
-    # ---- 2) Split text into blocks for tasks_output ----
-    paragraphs = [p.strip() for p in raw_text.split("\n") if p.strip()]
-    tasks_output = [{"content": p} for p in paragraphs]
+    # ---- New version, do not Split text into blocks for tasks_output ----
+    tasks_output = [{"content": raw_text}]
 
     # ---- 3) Create summary via LLM ----
     llm = state.get("llm")
