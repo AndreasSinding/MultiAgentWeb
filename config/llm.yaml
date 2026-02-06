@@ -1,16 +1,8 @@
 
-
 llm:
-  #provider: groq
-  #model: llama-3.3-70b-versatile
-  base_url: https://api.groq.com/openai/v1
-  #temperature: 0.2
-  # api_key is read from environment: GROQ_API_KEY
-
   provider: groq
-  model: llama-3.3-70b-versatile          # keep if you like the quality
+  model: llama-3.3-70b-versatile
   temperature: 0.2
-  max_output_tokens: 1400                 # hard stop to avoid runaway outputs
+  max_output_tokens: 1400
   request_timeout: 120
-  # If you want to lower cost/TPM further for earlier tasks, switch to:
-  # model: llama-3.1-8b-instant
+  # api_key from environment variable: GROQ_API_KEY
