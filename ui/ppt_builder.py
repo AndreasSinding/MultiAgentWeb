@@ -58,8 +58,7 @@ def _safe_filename(base: str) -> str:
     import re
     if not base:
         return "report"
-    return re.sub(r"[^A-Za-z0-9._\-]+", "_", base).strip("_") or "report"
-
+    return re.sub(r'[^A-Za-z0-9._-]+', '_', base).strip('_') or "report"
 
 def _strip(x: Any) -> str:
     return (x or "").strip()
@@ -239,10 +238,11 @@ def _extract_from_markdown_no(merged: Dict[str, Any], s: str) -> None:
                 merged["numbers"].append({"metric": metric, "value": value, "source": source})
 
         elif key == "recommendations":
-            prio, action, why = _split_recommendation(_drop_bullet(buf))
-            for i, (p, a, w) in enumerate(zip(prio, action, why), start=1):
+             clean = [_drop_bullet(x) for x in buf]
+             prio, action, why = _split_recommendation(clean)
+             for i, (p, a, w) in enumerate(zip(prio, action, why), start=1):
                 merged["recommendations"].append({"priority": p or i, "action": a, "rationale": w})
-        buf = []
+                buf = []
 
     # Simple header detection: lines that start with '#' or are exact section names
     for ln in lines:
@@ -258,9 +258,9 @@ def _extract_from_markdown_no(merged: Dict[str, Any], s: str) -> None:
             flush(); current = ln_lower; buf = []; continue
 
         # Accumulate bullets/paragraphs
-       if current:
+        if current:
             if re.match(r'^(\-|\*|•|\d+[.)])\s+', ln_clean) or ln_clean:
-                buf.append(ln_clean)
+                buf.append(ln_clean))
 
     flush()
 
