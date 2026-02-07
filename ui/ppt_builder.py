@@ -152,6 +152,62 @@ def _extract_all_json_blocks(tasks_output: List[Dict[str, Any]], also_consider: 
 
     return merged
 
+def _merge_json_into(merged: Dict[str, Any], obj: Dict[str, Any]) -> None:
+    """Merge JSON dict from agent into main structure."""
+    # NEW: Early-app compatibility: nested 'research' object
+    if isinstance(obj.get("research"), dict):
+        _merge_research_block(merged, obj["research"])
+
+    # Summary (prefer longest)
+    if "summary" in obj:
+        s = _strip(obj.get("summary"))
+        if s and len(s) > len(merged["summary"]):
+            merged["summary"] = s
+
+    # Simple list fields (strings)
+    for key in ("trends", "insights", "opportunities", "risks", "sources"):
+        val = obj.get(key)
+        # Accept both strings and dicts for trends (dicts will be formatted)
+        if key == "trends" and isinstance(val, list) and all(isinstance(x, dict) for x in val):
+            # Convert dict trends using the same formatter as research
+            _merge_research_block(merged, {"trends": val})
+        else:
+            for item in _coerce_list(val):
+                s = _strip(item)
+                if s and s not in merged[key]:
+                    merged[key].append(s)
+
+    # Competitors
+    if "competitors" in obj:
+        for comp in _coerce_list(obj.get("competitors")):
+            if isinstance(comp, dict):
+                merged["competitors"].append({
+                    "name": _strip(comp.get("name")),
+                    "position": _strip(comp.get("position")),
+                    "notes": _strip(comp.get("notes")),
+                })
+
+    # Numbers
+    if "numbers" in obj:
+        for n in _coerce_list(obj.get("numbers")):
+            if isinstance(n, dict):
+                merged["numbers"].append({
+                    "metric": _strip(n.get("metric")),
+                    "value": _strip(n.get("value")),
+                    "source": _strip(n.get("source")),
+                })
+
+    # Recommendations
+    if "recommendations" in obj:
+        for r in _coerce_list(obj.get("recommendations")):
+            if isinstance(r, dict):
+                merged["recommendations"].append({
+                    "priority": r.get("priority"),
+                    "action": _strip(r.get("action")),
+                    "rationale": _strip(r.get("rationale")),
+                })
+
+
 def _merge_any_json_into(merged: Dict[str, Any], obj: Any) -> None:
     if isinstance(obj, dict):
         _merge_json_into(merged, obj)
