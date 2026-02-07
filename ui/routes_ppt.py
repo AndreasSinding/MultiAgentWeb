@@ -8,11 +8,9 @@ import time
 import tempfile
 import json
 
-# Import your pipeline and the PPT builder
-# - run_crew_pipeline must return a dict that contains {"result": {"tasks_output": [...]}}
-# - create_multislide_pptx(topic, file_path) generates the PPT
+# Import your pipeline and builder
 from app.pipeline import run_crew_pipeline
-from ui.ppt_builder import create_multislide_pptx  # <-- adjust if your module name differs
+from ppt_builder import create_multislide_pptx   # adjust module name if different
 
 router = APIRouter(prefix="/reports", tags=["Reports"])
 
@@ -28,11 +26,10 @@ def _safe_filename(base: str) -> str:
 # --- 1) One-shot: run crew now -> build PPTX -> return file
 @router.post("/pptx")
 def create_pptx_from_run(req: RunRequest):
-    """
-    Runs the crew for the provided topic and returns a generated PPTX file.
-    """
     try:
-        result: Dict[str, Any] = run_crew_pipeline(req.topic)
+        # Kick off your crew
+        result: Dict[str, Any] = run_crew_pipeline(req.topic)   # must return {"result": {...}}
+        # Build PPT into a temp file
         safe = _safe_filename(req.topic)
         ts = time.strftime("%Y%m%d-%H%M%S")
         tmp_dir = tempfile.mkdtemp(prefix="ppt_")
@@ -51,17 +48,18 @@ def create_pptx_from_run(req: RunRequest):
 
 # --- 2) Convenience: reuse the "latest" stored JSON -> build PPTX
 @router.get("/pptx/from-latest")
-def create_pptx_from_latest(topic: str = Query(..., description="Title shown on the Title slide")):
+def create_pptx_from_latest(topic: str = Query(..., description="Title/topic shown on the Title slide")):
     """
-    Reads runs/latest_output.json (written by your pipeline) and returns a PPTX file.
+    Reads runs/latest_output.json (written by your pipeline) and builds a PPTX.
     """
     try:
-        # Resolve project root (ui/ -> project)
-        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        base_dir = os.path.dirname(__file__)
+        project_root = os.path.abspath(os.path.join(base_dir, ".."))  # adjust if needed
         latest_path = os.path.join(project_root, "runs", "latest_output.json")
         if not os.path.exists(latest_path):
             raise HTTPException(status_code=404, detail="No previous run stored (runs/latest_output.json missing).")
 
+        import json
         with open(latest_path, "r", encoding="utf-8") as f:
             result = json.load(f)
 
