@@ -12,7 +12,7 @@ import json
 # - run_crew_pipeline must return a dict that contains {"result": {"tasks_output": [...]}}
 # - create_multislide_pptx(topic, file_path) generates the PPT
 from app.pipeline import run_crew_pipeline
-from ppt_builder import create_multislide_pptx  # <-- adjust if your module name differs
+from ui.ppt_builder import create_multislide_pptx  # <-- adjust if your module name differs
 
 router = APIRouter(prefix="/reports", tags=["Reports"])
 
