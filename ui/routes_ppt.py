@@ -10,7 +10,7 @@ import json
 
 # Import your pipeline and builder
 from app.pipeline import run_crew_pipeline
-from ppt_builder import create_multislide_pptx   # adjust module name if different
+from ui.ppt_builder import create_multislide_pptx   # adjust module name if different
 
 router = APIRouter(prefix="/reports", tags=["Reports"])
 
