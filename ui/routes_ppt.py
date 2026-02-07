@@ -8,6 +8,9 @@ import time
 import tempfile
 import json
 
+import inspect, logging, ui.ppt_builder as _ppt_b
+logging.warning("PPT builder loaded from: %s", inspect.getsourcefile(_ppt_b))
+
 # Import your pipeline and builder
 from app.pipeline import run_crew_pipeline
 from ui.ppt_builder import create_multislide_pptx   # adjust module name if different
