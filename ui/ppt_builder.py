@@ -260,7 +260,7 @@ def _extract_from_markdown_no(merged: Dict[str, Any], s: str) -> None:
         # Accumulate bullets/paragraphs
         if current:
             if re.match(r'^(\-|\*|•|\d+[.)])\s+', ln_clean) or ln_clean:
-                buf.append(ln_clean))
+                buf.append(ln_clean)
 
     flush()
 
