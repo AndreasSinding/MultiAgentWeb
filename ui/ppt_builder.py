@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-ppt_builder.py – FINAL JSON-FIRST BUILDER (Option A + A2 fallback)
+ppt_builder.py – BUILDER WITH NO JSON 
 
 This version is optimized for:
 - CrewAI multi-agent JSON-only outputs
@@ -86,77 +86,213 @@ def _style_paragraph(p, size_pt: int = 18, font: str = "Segoe UI"):
             pass
 
 
-# ---------------------------------------------------------------------------
-# JSON extraction (Option A2: strict-first, fallback second)
-# ---------------------------------------------------------------------------
+# --- Markdown-first extraction (with JSON as bonus) --------------------------
+import re, json
+from typing import Any, Dict, List
 
-def _extract_all_json_blocks(tasks_output: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """
-    Extract ALL valid JSON dicts from tasks_output[*].raw/content/text.
-    Merge them into one data structure.
-    Missing sections -> empty lists (A2).
-    """
+SECTION_MAP_NO = {
+    "sammendrag": "summary",
+    "trender": "trends",
+    "innsikt": "insights",
+    "muligheter": "opportunities",
+    "risiko": "risks",
+    "aktører / konkurrenter": "competitors",
+    "aktorer / konkurrenter": "competitors",  # fallback ascii
+    "nøkkeltall": "numbers",
+    "nokkelstall": "numbers",  # fallback ascii
+    "anbefalinger": "recommendations",
+    "kilder": "sources",
+}
+SECTION_KEYS_EN = ["summary","trends","insights","opportunities","risks",
+                   "competitors","numbers","recommendations","sources"]
 
-    merged = {
-        "summary": "",
-        "trends": [],
-        "insights": [],
-        "opportunities": [],
-        "risks": [],
-        "competitors": [],
-        "numbers": [],
-        "recommendations": [],
-        "sources": []
-    }
+def _extract_all_json_blocks(tasks_output: List[Dict[str, Any]], also_consider: List[Any] = None) -> Dict[str, Any]:
+    merged = {k: ([] if k!="summary" else "") for k in SECTION_KEYS_EN}
+    candidates: List[str] = []
 
-    for blk in tasks_output:
-        for key in ("raw", "content", "text"):
+    # Collect possible text sources
+    for blk in tasks_output or []:
+        for key in ("raw","content","text","final_output"):
             s = blk.get(key)
-            if not isinstance(s, str):
+            if isinstance(s, str) and s.strip():
+                candidates.append(s)
+        if isinstance(blk.get("artifacts"), list):
+            for a in blk["artifacts"]:
+                if isinstance(a, dict):
+                    for k in ("content","text","raw"):
+                        v = a.get(k)
+                        if isinstance(v, str) and v.strip():
+                            candidates.append(v)
+
+    for extra in also_consider or []:
+        if isinstance(extra, str) and extra.strip():
+            candidates.append(extra)
+
+    # 1) Try strict JSON first (keeps compatibility)
+    for s in candidates:
+        ss = s.strip()
+        if (ss.startswith("{") and ss.endswith("}")) or (ss.startswith("[") and ss.endswith("]")):
+            try:
+                obj = json.loads(ss)
+                _merge_any_json_into(merged, obj)
                 continue
-            ss = _preclean_near_json(s.strip())
+            except Exception:
+                pass
+        for obj in _brace_scan_json(ss):
+            _merge_any_json_into(merged, obj)
 
-            # STRICT JSON BLOCK: whole string is JSON
-            if ss.startswith("{") and ss.endswith("}"):
-                try:
-                    obj = json.loads(ss)
-                    if isinstance(obj, dict):
-                        _merge_json_into(merged, obj)
-                except Exception:
-                    pass
+    # 2) Markdown-first parsing (Norwegian headings)
+    for s in candidates:
+        _extract_from_markdown_no(merged, s)
 
-            # FALLBACK: embedded { ... } blocks
-            for obj in _brace_scan_json(ss):
-                _merge_json_into(merged, obj)
+    # 3) URLs anywhere -> sources
+    urls = _find_urls(" \n".join(candidates))
+    for u in urls:
+        if u not in merged["sources"]:
+            merged["sources"].append(u)
 
     return merged
 
+def _merge_any_json_into(merged: Dict[str, Any], obj: Any) -> None:
+    if isinstance(obj, dict):
+        _merge_json_into(merged, obj)
+        return
+    if isinstance(obj, list):
+        if all(isinstance(x, str) for x in obj):
+            for x in obj:
+                x = _strip(x)
+                if x and x not in merged["insights"]:
+                    merged["insights"].append(x)
+        elif all(isinstance(x, dict) for x in obj):
+            for item in obj:
+                _merge_dict_like(merged, item)
 
-def _brace_scan_json(text: str) -> List[Dict[str, Any]]:
-    """Extract { ... } blocks using brace depth scanning."""
-    objs = []
-    depth = 0
-    start = None
+def _merge_dict_like(merged: Dict[str, Any], item: Dict[str, Any]) -> None:
+    keys = {k.lower() for k in item.keys()}
+    if {"name","position"} <= keys:
+        merged["competitors"].append({
+            "name": _strip(item.get("name")),
+            "position": _strip(item.get("position")),
+            "notes": _strip(item.get("notes"))
+        })
+    elif {"metric","value"} <= keys:
+        merged["numbers"].append({
+            "metric": _strip(item.get("metric")),
+            "value": _strip(item.get("value")),
+            "source": _strip(item.get("source"))
+        })
+    elif {"priority","action"} <= keys:
+        merged["recommendations"].append({
+            "priority": item.get("priority"),
+            "action": _strip(item.get("action")),
+            "rationale": _strip(item.get("rationale")),
+        })
+    else:
+        s = _strip("; ".join(f"{k}: {v}" for k, v in item.items()))
+        if s and s not in merged["insights"]:
+            merged["insights"].append(s)
 
+def _brace_scan_json(text: str) -> List[Any]:
+    objs, depth, start = [], 0, None
     for i, ch in enumerate(text):
         if ch == "{":
-            if depth == 0:
-                start = i
+            if depth == 0: start = i
             depth += 1
         elif ch == "}":
             depth -= 1
             if depth == 0 and start is not None:
-                block = text[start : i + 1]
+                block = text[start:i+1]
                 try:
-                    obj = json.loads(block)
-                    if isinstance(obj, dict):
-                        objs.append(obj)
+                    objs.append(json.loads(block))
                 except Exception:
                     pass
                 start = None
-
     return objs
 
+def _extract_from_markdown_no(merged: Dict[str, Any], s: str) -> None:
+    lines = [ln.rstrip() for ln in (s or "").splitlines()]
+    current = None
+    buf: List[str] = []
+
+    def flush():
+        nonlocal buf, current
+        if not current or not buf:
+            buf = []; return
+        key = SECTION_MAP_NO.get(current, None)
+        if not key:
+            buf = []; return
+
+        if key in ("trends","insights","opportunities","risks","sources"):
+            for it in buf:
+                val = _strip(_drop_bullet(it))
+                if val and val not in merged[key]:
+                    merged[key].append(val)
+
+        elif key == "competitors":
+            for it in buf:
+                name, pos, note = _split3(_drop_bullet(it))
+                merged["competitors"].append({"name": name, "position": pos, "notes": note})
+
+        elif key == "numbers":
+            for it in buf:
+                metric, value, source = _split3(_drop_bullet(it))
+                merged["numbers"].append({"metric": metric, "value": value, "source": source})
+
+        elif key == "recommendations":
+            prio, action, why = _split_recommendation(_drop_bullet(buf))
+            for i, (p, a, w) in enumerate(zip(prio, action, why), start=1):
+                merged["recommendations"].append({"priority": p or i, "action": a, "rationale": w})
+        buf = []
+
+    # Simple header detection: lines that start with '#' or are exact section names
+    for ln in lines:
+        ln_clean = ln.strip()
+        ln_lower = ln_clean.lower().rstrip(":")
+        if ln_clean.startswith("#"):
+            # Markdown header: take content without '#'
+            header = ln_clean.lstrip("# ").lower().rstrip(":")
+            if header in SECTION_MAP_NO:
+                flush(); current = header; buf = []; continue
+        # Support bare headings too
+        if ln_lower in SECTION_MAP_NO:
+            flush(); current = ln_lower; buf = []; continue
+
+        # Accumulate bullets/paragraphs
+        if current:
+            if re.match(r"^(\-|\*|•|\d+[.)])\s+", ln_clean) or ln_clean:
+                buf.append(ln_clean)
+
+    flush()
+
+def _split3(s: str):
+    parts = re.split(r"\s+[–\-|;:]\s+", s, maxsplit=2)
+    parts += ["", "", ""]
+    return _strip(parts[0]), _strip(parts[1]), _strip(parts[2])
+
+def _split_recommendation(items: List[str]):
+    prio, act, why = [], [], []
+    for it in items:
+        # e.g., "[Prioritet 1] Handling — Hvorfor"
+        m = re.match(r"^\[?\s*prioritet\s*(\d+)\s*\]?\s*(.+?)(?:\s+[—-]\s+(.+))?$", it, flags=re.I)
+        if m:
+            prio.append(int(m.group(1)))
+            act.append(_strip(m.group(2)))
+            why.append(_strip(m.group(3) or ""))
+        else:
+            # fallback: no explicit priority
+            prio.append(None)
+            segs = re.split(r"\s+[—-]\s+", it, maxsplit=1)
+            act.append(_strip(segs[0]))
+            why.append(_strip(segs[1] if len(segs) > 1 else ""))
+    return prio, act, why
+
+def _drop_bullet(s: str) -> str:
+    return re.sub(r"^(\-|\*|•|\d+[.)])\s+", "", s).strip()
+
+def _find_urls(s: str) -> List[str]:
+    return re.findall(r"(https?://[^\s)]+)", s or "")
+
+##########################
 
 # ---------------------------------------------------------------------------
 # JSON normalization + merging
