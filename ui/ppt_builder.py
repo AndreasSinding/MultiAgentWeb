@@ -8,7 +8,7 @@ This version is optimized for:
 - Soft fallback: missing JSON sections -> empty slides (no crash)
 - Works with FastAPI /reports/pptx route
 
-Slides generated:
+Slides generated: 
  1) Title
  2) Executive Summary
  3) Key Trends
