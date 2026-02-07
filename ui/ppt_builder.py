@@ -294,57 +294,56 @@ def _extract_from_markdown_no(merged: Dict[str, Any], s: str) -> None:
                 merged["numbers"].append({"metric": metric, "value": value, "source": source})
 
         elif key == "recommendations":
-             clean = [_drop_bullet(x) for x in buf]
-             prio, action, why = _split_recommendation(clean)
-             for i, (p, a, w) in enumerate(zip(prio, action, why), start=1):
+            clean = [_drop_bullet(x) for x in buf]
+            prio, action, why = _split_recommendation(clean)
+            for i, (p, a, w) in enumerate(zip(prio, action, why), start=1):
                 merged["recommendations"].append({"priority": p or i, "action": a, "rationale": w})
-                buf = []
 
-    # Simple header detection: lines that start with '#' or are exact section names
+        elif key == "summary":
+            # join paragraphs for the executive summary
+            text = " ".join([_drop_bullet(x) for x in buf]).strip()
+            if text and len(text) > len(merged["summary"]):
+                merged["summary"] = text
+
+        buf = []
+
     for ln in lines:
         ln_clean = ln.strip()
+
+        # If the model produced a bullet before a header, e.g. "- # Sammendrag"
+        if re.match(r'^(\-|\*|•|\d+[.)])\s+#', ln_clean):
+            ln_clean = re.sub(r'^(\-|\*|•|\d+[.)])\s+', '', ln_clean)
+
         ln_lower = ln_clean.lower().rstrip(":")
         if ln_clean.startswith("#"):
-            # Markdown header: take content without '#'
             header = ln_clean.lstrip("# ").lower().rstrip(":")
             if header in SECTION_MAP_NO:
                 flush(); current = header; buf = []; continue
-        # Support bare headings too
+
         if ln_lower in SECTION_MAP_NO:
             flush(); current = ln_lower; buf = []; continue
 
-        # Accumulate bullets/paragraphs
         if current:
             if re.match(r'^(\-|\*|•|\d+[.)])\s+', ln_clean) or ln_clean:
                 buf.append(ln_clean)
 
     flush()
 
+    flush()
+
 def _drop_bullet(s: str) -> str:
-    # Remove common bullet markers: -, *, •, "1.", "1)"
+    # -, *, •, "1.", "1)"
     return re.sub(r'^(\-|\*|•|\d+[.)])\s+', '', s).strip()
 
 def _find_urls(s: str) -> List[str]:
-    # Simple URL matcher
     return re.findall(r'(https?://[^\s)]+)', s or '')
 
 def _split3(s: str):
-    """
-    Split a line like:
-      "A – B – C" or "A - B - C" or "A | B | C" or "A; B; C" or "A: B: C"
-    into 3 fields. Excess separators in notes are tolerated.
-    """
     parts = re.split(r'\s+[–\-|;:]\s+', s, maxsplit=2)
     parts += ["", "", ""]
     return _strip(parts[0]), _strip(parts[1]), _strip(parts[2])
 
 def _split_recommendation(items: List[str]):
-    """
-    Parse lines like:
-      "[Prioritet 1] Handling — Hvorfor"
-      "Handling — Hvorfor"
-    Returns lists for prio, action, why (same length).
-    """
     prio, act, why = [], [], []
     for it in items:
         m = re.match(r'^\[?\s*prioritet\s*(\d+)\s*\]?\s*(.+?)(?:\s+[—-]\s+(.+))?$', it, flags=re.I)
@@ -479,7 +478,7 @@ def create_multislide_pptx(result: Dict[str, Any], topic: str, file_path: str) -
         if isinstance(v, str) and v.strip():
             also_consider.append(v)
 
-    sections = _extract_all_json_blocks(tasks_output)
+    sections = _extract_all_json_blocks(tasks_output, also_consider=also_consider)
 
     if not sections["summary"]:
         sections["summary"] = _strip(data.get("summary")) or "No summary available."
