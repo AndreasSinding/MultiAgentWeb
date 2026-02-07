@@ -27,6 +27,41 @@ def _safe_filename(base: str) -> str:
     return re.sub(r'[^A-Za-z0-9._-]+', '_', base).strip('_') or "report"
 
 # --- 1) One-shot: run crew now -> build PPTX -> return file
+@router.get("/diag/from-latest")
+def diag_from_latest():
+    import json, inspect
+    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    latest_path = os.path.join(project_root, "runs", "latest_output.json")
+    if not os.path.exists(latest_path):
+        raise HTTPException(status_code=404, detail="No runs/latest_output.json")
+    with open(latest_path, "r", encoding="utf-8") as f:
+        result = json.load(f)
+
+    # extract
+    from ui.ppt_builder import _extract_all_json_blocks  # type: ignore
+    data = result.get("result", {}) or result
+    sections = _extract_all_json_blocks(data.get("tasks_output", []), also_consider=[
+        data.get("summary"), data.get("final_output"), data.get("raw"), data.get("content"), data.get("text")
+    ])
+
+    # show counts and one sample
+    preview = {k: (len(v) if isinstance(v, list) else (len(v) if isinstance(v, str) else 0)) for k, v in sections.items()}
+    return {
+        "builder_loaded": inspect.getsourcefile(_extract_all_json_blocks),
+        "section_counts": preview,
+        "sample": {
+            "summary": sections["summary"][:200] if isinstance(sections["summary"], str) else "",
+            "trends_0": sections["trends"][0] if sections["trends"] else "",
+            "insights_0": sections["insights"][0] if sections["insights"] else "",
+            "opportunities_0": sections["opportunities"][0] if sections["opportunities"] else "",
+            "risks_0": sections["risks"][0] if sections["risks"] else "",
+            "competitors_0": sections["competitors"][0] if sections["competitors"] else "",
+            "numbers_0": sections["numbers"][0] if sections["numbers"] else "",
+            "recommendations_0": sections["recommendations"][0] if sections["recommendations"] else "",
+            "sources_0": sections["sources"][0] if sections["sources"] else "",
+        }
+    }
+    
 @router.post("/pptx")
 def create_pptx_from_run(req: RunRequest):
     try:
