@@ -1,16 +1,72 @@
-
 task:
   name: Executive Summary Task
   description: >
-    Lag et kort ledersammendrag (maks 300-400 ord) basert på research og analyse for {topic}.
-    Inkluder nøkkelpunkter, anbefalinger og kilder.
-  agent: Executive Summarizer
-  expected_output: >
-    Kort ledersammendrag (maks ~300–400 ord) med anbefalinger og kilder.
-    Lever KUN gyldig JSON.Ingen annen tekst er tillatt.
-      Format:
-      {
-        "summary": "Kortfattet ledersammendrag (maks 300 ord)"
-      }
+    Konsolider funn fra Researcher og Analyst til en endelig rapport for {topic}
+    i **ren Markdown** med faste seksjoner. Ikke gjenta all tekst; destiller og
+    standardiser. Bruk norsk (bokmål). Ingen kodegjerder (```), ingen JSON, ingen
+    innledende eller avsluttende fritekst utenfor strukturen.
 
-  # Free-form text output, no schema here (defaults to string)
+    Krav til innhold og kvalitet:
+    - Fakta og tall skal være etterprøvbart; legg kilden som URL i "## Kilder".
+    - Ikke hallusiner. Dersom du er usikker: utelat, eller merk som "estimert".
+    - Korte, konkrete bullets (maks ~120 tegn per punkt). Maks 6 bullets per seksjon.
+    - I "## Aktører / Konkurrenter": bruk «Navn – Posisjon – Notat».
+    - I "## Nøkkeltall": bruk «Metrikk – Verdi – Kilde».
+    - I "## Anbefalinger": bruk «[Prioritet n] Handling — Hvorfor».
+    - Ikke bruk tabeller; bruk punktlister.
+
+  expected_output: |
+    # Sammendrag
+    (1–3 korte avsnitt, 5–8 setninger totalt. Ingen punktlister her.)
+
+    ## Trender
+    - (punkt)
+    - (punkt)
+    - (punkt)
+
+    ## Innsikt
+    - (punkt)
+    - (punkt)
+
+    ## Muligheter
+    - (punkt)
+    - (punkt)
+
+    ## Risiko
+    - (punkt)
+    - (punkt)
+
+    ## Aktører / Konkurrenter
+    - Navn – Posisjon – Notat
+    - Navn – Posisjon – Notat
+
+    ## Nøkkeltall
+    - Metrikk – Verdi – Kilde
+    - Metrikk – Verdi – Kilde
+
+    ## Anbefalinger
+    - [Prioritet 1] Handling — Hvorfor
+    - [Prioritet 2] Handling — Hvorfor
+
+    ## Kilder
+    - https://… (én URL per linje)
+
+  # Pull prior outputs so the packager can consolidate them
+  context:
+    - outputs_from: Researcher
+    - outputs_from: Analyst
+    # (Optional) If you keep a separate executive summary task, include it:
+    # - outputs_from: Executive Summary Task
+
+  agent: Executive Summarizer
+
+  # (Optional) lightweight acceptance criteria for self-check (LLM-side)
+  # The agent should self-verify before returning.
+  acceptance_criteria: >
+    - Output er KUN Markdown og følger strukturen ovenfor, i gitt rekkefølge.
+    - Ingen kodegjerder, ingen JSON, ingen ekstra overskrifter.
+    - Maks 6 bullets per seksjon; bullets er korte og handlingsorienterte.
+    - "Aktører / Konkurrenter" følger «Navn – Posisjon – Notat».
+    - "Nøkkeltall" følger «Metrikk – Verdi – Kilde».
+    - "Anbefalinger" følger «[Prioritet n] Handling — Hvorfor».
+    - Alle tall med kilde lenket i "## Kilder".
