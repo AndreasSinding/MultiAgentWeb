@@ -1,44 +1,82 @@
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Body
+# ui/routes_ppt.py
+from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse
-import tempfile, uuid, os
+from pydantic import BaseModel
+from typing import Dict, Any
+import os
+import time
+import tempfile
+import json
 
+# Import your pipeline and the PPT builder
+# - run_crew_pipeline must return a dict that contains {"result": {"tasks_output": [...]}}
+# - create_multislide_pptx(topic, file_path) generates the PPT
 from app.pipeline import run_crew_pipeline
-from ui.ppt_builder import create_multislide_pptx, _safe_filename
+from ppt_builder import create_multislide_pptx  # <-- adjust if your module name differs
 
-router = APIRouter(prefix="/reports", tags=["PowerPoint"])
+router = APIRouter(prefix="/reports", tags=["Reports"])
 
+class RunRequest(BaseModel):
+    topic: str
 
-@router.post("/pptx", response_class=FileResponse)
-async def generate_pptx(
-    topic: str = Body(..., embed=True),
-    background_tasks: BackgroundTasks = None
-):
+def _safe_filename(base: str) -> str:
+    import re
+    if not base:
+        return "report"
+    return re.sub(r'[^A-Za-z0-9._-]+', '_', base).strip('_') or "report"
+
+# --- 1) One-shot: run crew now -> build PPTX -> return file
+@router.post("/pptx")
+def create_pptx_from_run(req: RunRequest):
     """
-    FINAL VERSION:
-    - Accepts ONLY 'topic'
-    - ALWAYS runs the pipeline
-    - Ensures PPT generator receives correct structure
+    Runs the crew for the provided topic and returns a generated PPTX file.
     """
-
     try:
-        enriched = run_crew_pipeline(topic)
+        result: Dict[str, Any] = run_crew_pipeline(req.topic)
+        safe = _safe_filename(req.topic)
+        ts = time.strftime("%Y%m%d-%H%M%S")
+        tmp_dir = tempfile.mkdtemp(prefix="ppt_")
+        out_path = os.path.join(tmp_dir, f"{safe}_{ts}.pptx")
+
+        create_multislide_pptx(result, req.topic, out_path)
+        return FileResponse(
+            out_path,
+            media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            filename=os.path.basename(out_path),
+        )
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(500, f"Pipeline failed: {type(e).__name__}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to create PPTX: {e}")
 
-    with tempfile.NamedTemporaryFile(suffix=".pptx", delete=False) as tmp:
-        tmp_path = tmp.name
-        try:
-            # IMPORTANT: wrap pipeline output into {"result": ...}
-            create_multislide_pptx({"result": enriched}, topic, tmp_path)
-        except Exception as e:
-            raise HTTPException(500, f"PPT generation failed: {type(e).__name__}: {e}")
+# --- 2) Convenience: reuse the "latest" stored JSON -> build PPTX
+@router.get("/pptx/from-latest")
+def create_pptx_from_latest(topic: str = Query(..., description="Title shown on the Title slide")):
+    """
+    Reads runs/latest_output.json (written by your pipeline) and returns a PPTX file.
+    """
+    try:
+        # Resolve project root (ui/ -> project)
+        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        latest_path = os.path.join(project_root, "runs", "latest_output.json")
+        if not os.path.exists(latest_path):
+            raise HTTPException(status_code=404, detail="No previous run stored (runs/latest_output.json missing).")
 
-    filename = f"{_safe_filename(topic)}_{uuid.uuid4().hex[:8]}.pptx"
+        with open(latest_path, "r", encoding="utf-8") as f:
+            result = json.load(f)
 
-    background_tasks.add_task(os.remove, tmp_path)
+        safe = _safe_filename(topic)
+        ts = time.strftime("%Y%m%d-%H%M%S")
+        tmp_dir = tempfile.mkdtemp(prefix="ppt_")
+        out_path = os.path.join(tmp_dir, f"{safe}_{ts}.pptx")
 
-    return FileResponse(
-        tmp_path,
-        filename=filename,
-        media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-    )
+        create_multislide_pptx(result, topic, out_path)
+        return FileResponse(
+            out_path,
+            media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            filename=os.path.basename(out_path),
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to create PPTX from latest: {e}")
