@@ -65,37 +65,43 @@ def diag_from_latest():
 @router.post("/pptx")
 def create_pptx_from_run(req: RunRequest):
     try:
-        # Kick off your crew
-        result: Dict[str, Any] = run_crew_pipeline(req.topic) # must return {"result": {...}}
+        # 1) Run the crew pipeline
+        result: Dict[str, Any] = run_crew_pipeline(req.topic)  # pass-through; builder handles wrapped/unwrapped
 
-    try:
-        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-        runs_dir = os.path.join(project_root, "runs")
-        os.makedirs(runs_dir, exist_ok=True)
-        out_json = os.path.join(runs_dir, "latest_output.json")
-        with open(out_json, "w", encoding="utf-8") as f:
-            json.dump(result, f, ensure_ascii=False, indent=2)
-    except Exception as _e:
-        # don't fail the request on telemetry issue
-        logging.warning("Could not persist latest_output.json: %s", _e)
+        # 2) Best-effort: persist latest_output.json for diagnostics
+        try:
+            project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+            runs_dir = os.path.join(project_root, "runs")
+            os.makedirs(runs_dir, exist_ok=True)
+            out_json = os.path.join(runs_dir, "latest_output.json")
+            with open(out_json, "w", encoding="utf-8") as f:
+                json.dump(result, f, ensure_ascii=False, indent=2)
+        except Exception as _e:
+            # Do not fail the request if persistence fails
+            logging.warning("Could not persist latest_output.json: %s", _e)
 
-        # Build PPT into a temp file
+        # 3) Build PPT into a temp file
         safe = _safe_filename(req.topic)
         ts = time.strftime("%Y%m%d-%H%M%S")
         tmp_dir = tempfile.mkdtemp(prefix="ppt_")
         out_path = os.path.join(tmp_dir, f"{safe}_{ts}.pptx")
 
         create_multislide_pptx(result, req.topic, out_path)
+
+        # 4) Return the file
         return FileResponse(
             out_path,
             media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
             filename=os.path.basename(out_path),
         )
+
     except HTTPException:
+        # Bubble up explicit FastAPI errors
         raise
     except Exception as e:
+        # Catch-all for unexpected issues in pipeline or PPT build
         raise HTTPException(status_code=500, detail=f"Failed to create PPTX: {e}")
-
+        
 # --- 2) Convenience: reuse the "latest" stored JSON -> build PPTX
 @router.get("/pptx/from-latest")
 def create_pptx_from_latest(topic: str = Query(..., description="Title/topic shown on the Title slide")):
