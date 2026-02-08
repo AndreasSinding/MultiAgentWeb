@@ -66,7 +66,19 @@ def diag_from_latest():
 def create_pptx_from_run(req: RunRequest):
     try:
         # Kick off your crew
-        result: Dict[str, Any] = run_crew_pipeline(req.topic)   # must return {"result": {...}}
+        result: Dict[str, Any] = run_crew_pipeline(req.topic) # must return {"result": {...}}
+
+    try:
+        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        runs_dir = os.path.join(project_root, "runs")
+        os.makedirs(runs_dir, exist_ok=True)
+        out_json = os.path.join(runs_dir, "latest_output.json")
+        with open(out_json, "w", encoding="utf-8") as f:
+            json.dump(result, f, ensure_ascii=False, indent=2)
+    except Exception as _e:
+        # don't fail the request on telemetry issue
+        logging.warning("Could not persist latest_output.json: %s", _e)
+
         # Build PPT into a temp file
         safe = _safe_filename(req.topic)
         ts = time.strftime("%Y%m%d-%H%M%S")
