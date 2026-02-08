@@ -167,15 +167,33 @@ def root():
         "endpoints": ["/run (POST)", "/latest (GET)", "/status (GET)", "/healthz (GET)"]
     }
 
+# main.py
+
 @app.post("/run")
 def run(req: RunRequest):
     try:
         output = run_crew_pipeline(req.topic)
+
+        # --- NEW: persist for diagnostics so /reports/diag/from-latest works ---
+        try:
+            base_dir = os.path.dirname(__file__)          # BASE works too if you have it
+            runs_dir = os.path.join(base_dir, "runs")
+            os.makedirs(runs_dir, exist_ok=True)
+            outfile = os.path.join(runs_dir, "latest_output.json")
+            with open(outfile, "w", encoding="utf-8") as f:
+                json.dump(output, f, ensure_ascii=False, indent=2)
+        except Exception as _e:
+            # Do not fail the API if persistence fails
+            print("WARNING: could not persist latest_output.json from /run:", _e)
+        # --- /NEW ---
+
         return {"topic": req.topic, "result": output}
+
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+        
 
 @app.get("/latest")
 def latest():
