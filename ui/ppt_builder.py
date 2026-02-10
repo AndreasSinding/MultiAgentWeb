@@ -66,7 +66,10 @@ def _safe_filename(base: str) -> str:
 
 
 def _strip(x: Any) -> str:
-    return (x or "").strip()
+    """Robust strip that safely handles non-strings (int, float, None)."""
+    if x is None:
+        return ""
+    return str(x).strip()
 
 
 def _coerce_list(x: Any) -> List[Any]:
@@ -623,31 +626,44 @@ def _add_table_slide(prs, title: str, headers: List[str], rows: List[List[str]])
                     p.font.size = Pt(12)
     else:
         table.cell(1, 0).text = "No structured data available."
-      
 
-# --- replace old helper ---
-def _strip(x: Any) -> str:
-    if x is None:
+
+# --------------------------------------------------------------------
+# New: bullet normalization for soft/fuzzy de-duplication
+# --------------------------------------------------------------------
+def _normalize_bullet_text(s: str) -> str:
+    """
+    Normalize bullet-like lines so dedupe works but content remains distinct.
+    - removes leading symbols (-, •, *)
+    - collapses whitespace
+    - normalizes colon spacing
+    - lowercases for signature only
+    """
+    if not s:
         return ""
-    return str(x).strip()
+    s = str(s).strip()
+    s = re.sub(r"^[-*•]+\s*", "", s)           # leading bullets
+    s = re.sub(r"\s+", " ", s)                 # multiple spaces -> single
+    s = re.sub(r"\s*:\s*", ": ", s)            # normalize "topic : text" / "topic:  text"
+    return s.lower().strip()
 
 
 def _clean_sections(sections):
     """Final pass to eliminate duplicates while preserving content."""
-
     for key, value in sections.items():
         if key == "summary":
-            continue  # already longest selected
+            continue  # Keep longest summary
 
-        # --- Mild literal dedupe for general text sections ---
+        # --- Mild dedupe for general text sections using normalization signature ---
         if key in ("trends", "insights", "opportunities", "risks"):
             cleaned = []
             seen = set()
             for v in value:
-                s = _strip(v)
-                if s and s not in seen:
-                    seen.add(s)
-                    cleaned.append(s)
+                original = _strip(v)
+                normalized = _normalize_bullet_text(original)
+                if normalized and normalized not in seen:
+                    seen.add(normalized)
+                    cleaned.append(original)   # keep user's original formatting
             sections[key] = cleaned
             continue
 
@@ -676,15 +692,25 @@ def _clean_sections(sections):
                 )
                 if row_sig not in seen:
                     seen.add(row_sig)
-                    unique.append(item)
+                    unique.append({k: _strip(item.get(k, "")) for k in item})
             sections[key] = unique
             continue
 
         # --- sources: literal dedupe ---
         if key == "sources":
-            sections[key] = list(dict.fromkeys(_strip(v) for v in value))
+            deduped = []
+            seen = set()
+            for v in value:
+                s = _strip(v)
+                if s and s not in seen:
+                    seen.add(s)
+                    deduped.append(s)
+            sections[key] = deduped
+            continue
 
     return sections
+
+
 # --------------------------------------------------------------------
 # Public API
 # --------------------------------------------------------------------
@@ -704,10 +730,13 @@ def create_multislide_pptx(result: Dict[str, Any], topic: str, file_path: str) -
         also_consider.extend(_collect_strings_deep(data)[:20])
 
     sections = _extract_all_json_blocks(tasks_output, also_consider=also_consider)
-    sections = _clean_sections(sections)
-  
+
+    # ensure we always have a summary
     if not sections["summary"]:
         sections["summary"] = _strip(data.get("summary")) or "No summary available."
+
+    # final cleanup pass (dedupe, normalization)
+    sections = _clean_sections(sections)
 
     prs = Presentation()
 
