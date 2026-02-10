@@ -624,6 +624,14 @@ def _add_table_slide(prs, title: str, headers: List[str], rows: List[List[str]])
     else:
         table.cell(1, 0).text = "No structured data available."
       
+
+# --- replace old helper ---
+def _strip(x: Any) -> str:
+    if x is None:
+        return ""
+    return str(x).strip()
+
+
 def _clean_sections(sections):
     """Final pass to eliminate duplicates, merge similar rows, and clean whitespace."""
     for key, value in sections.items():
@@ -636,21 +644,20 @@ def _clean_sections(sections):
 
             for v in value:
                 if isinstance(v, dict):
-                    # Normalize dictionary rows (e.g., competitors/numbers)
-                    t = tuple((k, str(v.get(k, "")).strip().lower()) for k in sorted(v.keys()))
+                    # Signature for dict rows (normalized, case-insensitive)
+                    t = tuple((k, _strip(v.get(k, "")).lower()) for k in sorted(v.keys()))
                     if t not in seen:
                         seen.add(t)
                         cleaned.append({k: _strip(v.get(k, "")) for k in v})
                 else:
-                    # Normalize string rows
-                    s = " ".join(str(v).split()).strip().lower()
-                    if s and s not in seen:
-                        seen.add(s)
-                        cleaned.append(str(v).strip())
+                    # Signature for string rows (normalized)
+                    s_key = " ".join(str(v).split()).strip().lower()
+                    if s_key and s_key not in seen:
+                        seen.add(s_key)
+                        cleaned.append(_strip(v))
 
             sections[key] = cleaned
 
-        # Recommendations: dedupe by (action + rationale)
         if key == "recommendations":
             norm = []
             seen = set()
@@ -663,12 +670,11 @@ def _clean_sections(sections):
                     norm.append(r)
             sections[key] = norm
 
-        # Competitors + Numbers: deeper row normalization
         if key in ("competitors", "numbers"):
             unique = []
             seen = set()
             for item in sections[key]:
-                row_sig = tuple((k, str(item.get(k, "")).strip().lower()) for k in sorted(item.keys()))
+                row_sig = tuple((k, _strip(item.get(k, "")).lower()) for k in sorted(item.keys()))
                 if row_sig not in seen:
                     seen.add(row_sig)
                     unique.append(item)
