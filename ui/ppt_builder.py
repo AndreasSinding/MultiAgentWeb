@@ -623,8 +623,58 @@ def _add_table_slide(prs, title: str, headers: List[str], rows: List[List[str]])
                     p.font.size = Pt(12)
     else:
         table.cell(1, 0).text = "No structured data available."
+      
+def _clean_sections(sections):
+    """Final pass to eliminate duplicates, merge similar rows, and clean whitespace."""
+    for key, value in sections.items():
+        if key == "summary":
+            continue  # Keep longest summary
 
+        if isinstance(value, list):
+            cleaned = []
+            seen = set()
 
+            for v in value:
+                if isinstance(v, dict):
+                    # Normalize dictionary rows (e.g., competitors/numbers)
+                    t = tuple((k, str(v.get(k, "")).strip().lower()) for k in sorted(v.keys()))
+                    if t not in seen:
+                        seen.add(t)
+                        cleaned.append({k: _strip(v.get(k, "")) for k in v})
+                else:
+                    # Normalize string rows
+                    s = " ".join(str(v).split()).strip().lower()
+                    if s and s not in seen:
+                        seen.add(s)
+                        cleaned.append(str(v).strip())
+
+            sections[key] = cleaned
+
+        # Recommendations: dedupe by (action + rationale)
+        if key == "recommendations":
+            norm = []
+            seen = set()
+            for r in sections[key]:
+                action = _strip(r.get("action", "")).lower()
+                rationale = _strip(r.get("rationale", "")).lower()
+                sig = (action, rationale)
+                if sig not in seen:
+                    seen.add(sig)
+                    norm.append(r)
+            sections[key] = norm
+
+        # Competitors + Numbers: deeper row normalization
+        if key in ("competitors", "numbers"):
+            unique = []
+            seen = set()
+            for item in sections[key]:
+                row_sig = tuple((k, str(item.get(k, "")).strip().lower()) for k in sorted(item.keys()))
+                if row_sig not in seen:
+                    seen.add(row_sig)
+                    unique.append(item)
+            sections[key] = unique
+
+    return sections
 # --------------------------------------------------------------------
 # Public API
 # --------------------------------------------------------------------
@@ -644,6 +694,8 @@ def create_multislide_pptx(result: Dict[str, Any], topic: str, file_path: str) -
         also_consider.extend(_collect_strings_deep(data)[:20])
 
     sections = _extract_all_json_blocks(tasks_output, also_consider=also_consider)
+    sections = _clean_sections(sections)
+  
     if not sections["summary"]:
         sections["summary"] = _strip(data.get("summary")) or "No summary available."
 
