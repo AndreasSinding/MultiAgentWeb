@@ -633,35 +633,29 @@ def _strip(x: Any) -> str:
 
 
 def _clean_sections(sections):
-    """Final pass to eliminate duplicates, merge similar rows, and clean whitespace."""
+    """Final pass to eliminate duplicates while preserving content."""
+
     for key, value in sections.items():
         if key == "summary":
-            continue  # Keep longest summary
+            continue  # already longest selected
 
-        if isinstance(value, list):
+        # --- Mild literal dedupe for general text sections ---
+        if key in ("trends", "insights", "opportunities", "risks"):
             cleaned = []
             seen = set()
-
             for v in value:
-                if isinstance(v, dict):
-                    # Signature for dict rows (normalized, case-insensitive)
-                    t = tuple((k, _strip(v.get(k, "")).lower()) for k in sorted(v.keys()))
-                    if t not in seen:
-                        seen.add(t)
-                        cleaned.append({k: _strip(v.get(k, "")) for k in v})
-                else:
-                    # Signature for string rows (normalized)
-                    s_key = " ".join(str(v).split()).strip().lower()
-                    if s_key and s_key not in seen:
-                        seen.add(s_key)
-                        cleaned.append(_strip(v))
-
+                s = _strip(v)
+                if s and s not in seen:
+                    seen.add(s)
+                    cleaned.append(s)
             sections[key] = cleaned
+            continue
 
+        # --- recommendations: dedupe by action+rationale ---
         if key == "recommendations":
             norm = []
             seen = set()
-            for r in sections[key]:
+            for r in value:
                 action = _strip(r.get("action", "")).lower()
                 rationale = _strip(r.get("rationale", "")).lower()
                 sig = (action, rationale)
@@ -669,16 +663,26 @@ def _clean_sections(sections):
                     seen.add(sig)
                     norm.append(r)
             sections[key] = norm
+            continue
 
+        # --- competitors & numbers: structured dedupe ---
         if key in ("competitors", "numbers"):
             unique = []
             seen = set()
-            for item in sections[key]:
-                row_sig = tuple((k, _strip(item.get(k, "")).lower()) for k in sorted(item.keys()))
+            for item in value:
+                row_sig = tuple(
+                    (k, _strip(item.get(k, "")).lower())
+                    for k in sorted(item.keys())
+                )
                 if row_sig not in seen:
                     seen.add(row_sig)
                     unique.append(item)
             sections[key] = unique
+            continue
+
+        # --- sources: literal dedupe ---
+        if key == "sources":
+            sections[key] = list(dict.fromkeys(_strip(v) for v in value))
 
     return sections
 # --------------------------------------------------------------------
