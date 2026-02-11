@@ -4,21 +4,26 @@ import json
 from typing import List, Optional, Dict, Any
 
 from pydantic import BaseModel, Field
-from crewai_tools import BaseTool  # corrected module name
-import exa  # Exa official python SDK
+from crewai_tools import BaseTool  # correct import
+import exa  # Exa official SDK
 
 
-# Default limits (safe/cost‑controlled)
-DEFAULT_RESULTS = 5     # max results per search
-DEFAULT_PAGES = 5       # max documents to fetch content for
-MAX_TOTAL_SEARCHES = 3  # strict safety budget
+# ---------------------------------------
+# Defaults (safe, cost‑controlled)
+# ---------------------------------------
+DEFAULT_RESULTS = 5
+DEFAULT_PAGES = 5
+MAX_TOTAL_SEARCHES = 3
 
 
-# -----------------------------
-# Pydantic input schema
-# -----------------------------
+# ---------------------------------------
+# Input Schema
+# ---------------------------------------
 class ExaSearchAndContentsInput(BaseModel):
-    query: str = Field(..., description="Natural‑language query")
+    """
+    Input schema for queries to the tool.
+    """
+    query: str = Field(..., description="Natural‑language search query")
     results: int = Field(DEFAULT_RESULTS, ge=1, le=25)
     pages: int = Field(DEFAULT_PAGES, ge=1, le=25)
     included_domains: Optional[List[str]] = None
@@ -26,19 +31,19 @@ class ExaSearchAndContentsInput(BaseModel):
     recency_days: Optional[int] = None
 
 
-# -----------------------------
+# ---------------------------------------
 # Tool Implementation
-# -----------------------------
+# ---------------------------------------
 class ExaSearchAndContents(BaseTool):
     """
-    CrewAI tool: lightweight Exa search+contents fetcher
-    Returns compact JSON: title, url, snippet, content.
+    CrewAI tool for performing Exa search + content extraction.
+    Enforces a strict search‑budget per agent run.
     """
 
     name: str = "exasearchandcontents"
     description: str = (
-        "Performs a web search using Exa and fetches page contents. "
-        "Respects strict per‑task usage limits. Returns JSON with items[]."
+        "Performs targeted Exa web searches and retrieves page contents. "
+        "Budget‑limited and returns structured JSON."
     )
 
     args_schema = ExaSearchAndContentsInput
@@ -54,16 +59,16 @@ class ExaSearchAndContents(BaseTool):
         # API key
         exa.api_key = os.getenv("EXA_API_KEY", "")
         if not exa.api_key:
-            raise RuntimeError("Missing EXA_API_KEY environment variable")
+            raise RuntimeError("Missing EXA_API_KEY environment variable.")
 
-        # Safety limits
+        # Tool limits
         self.results = max(1, min(25, results))
         self.pages = max(1, min(25, pages))
         self._search_calls = 0
 
-    # -------------------------------------
-    # Budget guard
-    # -------------------------------------
+    # ---------------------------------------
+    # Budget Guard
+    # ---------------------------------------
     def _guard_budget(self):
         if self._search_calls >= MAX_TOTAL_SEARCHES:
             raise RuntimeError(
@@ -71,9 +76,9 @@ class ExaSearchAndContents(BaseTool):
             )
         self._search_calls += 1
 
-    # -------------------------------------
-    # Main execution handler
-    # -------------------------------------
+    # ---------------------------------------
+    # Main Logic
+    # ---------------------------------------
     def _run(
         self,
         query: str,
@@ -83,10 +88,12 @@ class ExaSearchAndContents(BaseTool):
         excluded_domains: Optional[List[str]] = None,
         recency_days: Optional[int] = None,
     ) -> str:
-
+        """
+        Executes the Exa search and returns JSON-encoded results.
+        """
         self._guard_budget()
 
-        # prefer input overrides
+        # Override defaults
         r = results or self.results
         p = pages or self.pages
 
@@ -99,7 +106,7 @@ class ExaSearchAndContents(BaseTool):
         if recency_days:
             opts["start_published_date"] = f"now-{int(recency_days)}d"
 
-        # Run the search
+        # Perform search
         try:
             response = exa.search_and_contents(query, **opts)
         except Exception as e:
@@ -108,7 +115,6 @@ class ExaSearchAndContents(BaseTool):
                 "note": f"exa.search_and_contents failed: {e}"
             })
 
-        # Normalize items
         items = []
         for item in getattr(response, "results", [])[:p]:
             title = getattr(item, "title", "") or ""
@@ -130,8 +136,7 @@ class ExaSearchAndContents(BaseTool):
                 "url": url,
                 "published_date": published,
                 "snippet": snippet,
-                "content": content[:5000],  # truncate for safety
+                "content": content[:5000],  # safety truncation
             })
 
         return json.dumps({"items": items})
-
