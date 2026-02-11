@@ -7,6 +7,7 @@ import threading
 import importlib
 from typing import Dict, Any
 from fastapi import HTTPException
+from app.exatool import ExaSearchAndContents
 
 # Project root (one level up from /app)
 BASE = os.path.dirname(os.path.dirname(__file__))
