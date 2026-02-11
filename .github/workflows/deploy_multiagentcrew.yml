@@ -49,7 +49,7 @@ jobs:
           pip install -r requirements.txt
         # App Service will run Oryx and install again during deployment.
 
-      - name: Auto-fix HTML entities/backticks under ui/
+      - name: Auto-fix HTML entities/backticks under ui/ 
         shell: bash
         run: |
           set -euo pipefail
