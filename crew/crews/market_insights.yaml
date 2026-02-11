@@ -1,14 +1,18 @@
 
 crew:
-  name: MarketInsightsCrew
-  description: >
-    Pipeline: research → analyse → executive summary.
-  process: sequential  # or 'parallel' (we’ll map to Process.sequential/parallel)
-  agents:
-    - Market Researcher
-    - Market Analyst
-    - Executive Summarizer
+  name: Market Insights Crew
+
+  # Ordered execution (O1)
   order:
     - Research Task
     - Analysis Task
     - Executive Summary Task
+
+  # Use all agents (roles must match agent.role)
+  agents:
+    - Market Researcher
+    - Market Analyst
+    - Executive Summarizer
+
+  # Sequential multi-agent pipeline
+  process: sequential
