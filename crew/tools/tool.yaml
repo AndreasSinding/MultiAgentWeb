@@ -1,3 +1,0 @@
-from app.exatool import ExaSearchAndContents
-
-tool = ExaSearchAndContents(results=5, pages=5)

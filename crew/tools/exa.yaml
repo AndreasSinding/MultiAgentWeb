@@ -1,0 +1,7 @@
+
+tool:
+  name: exasearchand_contents
+  type: ExaSearchAndContents
+  config:
+    results: 5        # <= keep cost low
+    pages: 5          # <= keep cost low
