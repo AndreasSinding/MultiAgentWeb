@@ -13,6 +13,7 @@ from crewai_tools import TavilySearchTool, SerperDevTool
 from app.models import ResearchOutput, AnalysisOutput
 
 load_dotenv()
+exa_api_key = os.getenv("EXA_API_KEY")
 
 # Map YAML schema names -> actual Pydantic classes
 SCHEMA_REGISTRY = {
