@@ -181,7 +181,7 @@ def status():
 
 # ---------- Pipeline helpers ----------
 def ensure_keys():
-    required = ["GROQ_API_KEY"]  # add OPENAI_API_KEY etc. if needed
+    required = ["GROQ_API_KEY", EXA_API:KEY]  # add OPENAI_API_KEY etc. if needed
     missing = [k for k in required if not os.getenv(k)]
     if missing:
         raise HTTPException(status_code=400, detail=f"Missing environment variables: {', '.join(missing)}")
