@@ -1,9 +1,8 @@
-
 task:
   name: Analysis Task
   description: >
     Analyser forskningsresultatene for {topic}.
-    Identifiser innsikt, muligheter, risiko og prioriterte anbefalinger (1–5).
+    Identifiser innsikt, muligheter, risikoer og prioriterte anbefalinger (1–5).
   agent: Market Analyst
   expected_output: >
     Analytisk vurdering med konkrete anbefalinger.
