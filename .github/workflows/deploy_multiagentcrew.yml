@@ -1,0 +1,95 @@
+name: Build and deploy (Oryx from source) - multiagentcrew
+
+on:
+  push:
+    branches: [ multiagentppt ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: multiagentcrew-prod-deploy
+  cancel-in-progress: true
+
+env:
+  AZURE_WEBAPP_NAME: multiagentcrew
+  PYTHON_VERSION: '3.11'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python (for sanity checks only)
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Ensure runtime.txt (forces Python detection)
+        run: |
+          if [ ! -f runtime.txt ]; then
+            echo "python-${{ env.PYTHON_VERSION }}" > runtime.txt
+          fi
+          cat runtime.txt
+
+      - name: Verify requirements.txt exists at repo root
+        run: |
+          test -f requirements.txt || (echo "requirements.txt missing at repo root" && exit 1)
+          head -n 50 requirements.txt || true
+
+      - name: Dependency sanity check (runner only)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+        # App Service will run Oryx and install again during deployment.
+
+      - name: Auto-fix HTML entities/backticks under ui/
+        shell: bash
+        run: |
+          set -euo pipefail
+          find ui -type f -name "*.py" -print0 | xargs -0 sed -i \
+            -e 's/-&gt;/->/g' \
+            -e 's/&gt;=/>=/g' \
+            -e 's/&gt;/>/g' \
+            -e 's/&lt;=/<=/g' \
+            -e 's/&lt;/</g' \
+            -e 's/&amp;/\&/g' \
+            -e 's/`//g'
+          if grep -RInE --exclude-dir='\.git' --exclude-dir='__pycache__' '(-&gt;|&gt;=|&lt;|&amp;|`)' ui | head -n 1; then
+            echo "WARNING: Some HTML entities/backticks may remain; attempting to continue..."
+          else
+            echo "No HTML entities/backticks found after auto-fix."
+          fi
+
+      - name: Quick static checks (compile)
+        run: |
+          python -m compileall -q .
+
+      - name: Sanity import test (routes & ppt builder)
+        run: |
+          python - <<'PY'
+          import importlib
+          # Will raise if names are wrong
+          importlib.import_module('ui.ppt_builder')
+          from ui.ppt_builder import _safe_filename, create_multislide_pptx
+          importlib.import_module('ui.routes_ppt')
+          print("Imports OK")
+          PY
+
+      # No Azure login step here — publish profile auth goes directly to the deploy action.
+      - name: Deploy to Azure Web App (source folder → Oryx build on server)
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: ${{ env.AZURE_WEBAPP_NAME }}
+          publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
+          package: .
+          clean: true
+          restart: true
+          # NOTE: startup-command is ignored with publish-profile auth; set it in Portal if needed.
+          
