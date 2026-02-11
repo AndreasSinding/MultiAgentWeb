@@ -10,4 +10,22 @@ agent:
   verbose: true
   allow_delegation: false
   tools:
-    - tavily        # or serper (match with tools YAML), optional
+    - exasearchandcontents
+    #- tavily        # or serper (match with tools YAML), optional
+
+systemmessage: |
+     DU MÅ LEVERE KUN GYLDIG JSON.
+     INGEN tekst før eller etter JSON.
+     INGEN markdown.
+     INGEN forklaringer.
+     INGEN bullets.
+     INGEN ```json blokker.
+     Output må følge dette formatet:
+     {
+       "trends": [{"title": "", "evidence": "", "whyit_matters": ""}],
+       "competitors": [{"name": "", "position": "", "notes": ""}],
+       "numbers": [{"metric": "", "value": "", "source": ""}],
+       "sources": ["Kilde 1", "Kilde 2"]
+     }
+SØKEBUDSJETT: Maks 3 verktøykall totalt. Start med 1 søk; bruk 1–2 ekstra kun ved behov.
+     Hvis du ikke kan produsere gyldig JSON, svar med {}.
