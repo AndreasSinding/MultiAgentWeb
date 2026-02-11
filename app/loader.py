@@ -8,6 +8,7 @@ from typing import Dict, Any, Optional
 from dotenv import load_dotenv
 from crewai import Agent, Task, Crew, LLM, Process
 from crewai_tools import TavilySearchTool, SerperDevTool
+from app.exatool import ExaSearchAndContents
 
 # Pydantic schemas
 from app.models import ResearchOutput, AnalysisOutput
@@ -25,6 +26,7 @@ SCHEMA_REGISTRY = {
 TOOL_REGISTRY = {
     "TavilySearchTool": lambda cfg: TavilySearchTool(**(cfg or {})),
     "SerperDevTool": lambda cfg: SerperDevTool(**(cfg or {})),
+    "ExaSearchAndContents": lamda cfg: ExaSearchAndContents (**(cfg or {})
 }
 
 
