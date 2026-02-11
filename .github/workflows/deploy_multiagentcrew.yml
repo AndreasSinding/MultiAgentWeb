@@ -2,7 +2,7 @@ name: Build and deploy (Oryx from source) - multiagentcrew
 
 on:
   push:
-    branches: [ multiagentppt ]
+    branches: [ multiagentsearch ]
   workflow_dispatch:
 
 permissions:
