@@ -1,15 +1,13 @@
-
 task:
   name: Research Task
   description: >
-    Gjør nett-research på {topic} med lav kostnad
+    Gjør nett-research på {topic} med lav kostnad.
     Finn minst tre dagsaktuelle trender, 3–5 konkurrenter/aktører og 5–8 solide kilder.
     Vær spesifikk og presis; prioriter ferske artikler/rapporter.
     Bruk kun verktøyet "exasearchandcontents" med maks 3 kall totalt (helst 1–2).
     Hent maks 5 resultater per søk og maks 5 sider med innhold.
-    Vær spesifikk og presis; prioriter ferske artikler/rapporter, med maks 3 trender, 3 aktører og 5 kilder/tall.
-
+    Hvis du ikke kan produsere gyldig JSON, lever {}.
   agent: Market Researcher
   expected_output: >
-    Lever KUN gyldig JSON. Ingen tekst før eller etter JSON    
+    Lever KUN gyldig JSON. Ingen tekst før eller etter JSON.
   output_schema: ResearchOutput
