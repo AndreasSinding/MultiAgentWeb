@@ -1,8 +1,10 @@
 import os
 from future import annotations
+from typing import List, Optional, Dict, Any
 from pydantic import BaseModel, Field
 from crewaitools import BaseTool
 import exa
+
 DEFAULTRESULTS = 5
 DEFAULTPAGES = 5
 
