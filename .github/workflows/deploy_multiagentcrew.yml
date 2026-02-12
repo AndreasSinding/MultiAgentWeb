@@ -56,7 +56,7 @@ jobs:
       uses: azure/webapps-deploy@v3
       with:
         app-name: multiagentcrew-ebazexd2e0h7e4fh             # <-- your app
-        publish-profile: ${{ secrets.AZURE_PUBLISH_PROFILE }} # export from Azure Portal
+        publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }} # export from Azure Portal
         package: release.zip
 
     # Optional: force restart so a new /tmp/<id> is used immediately
