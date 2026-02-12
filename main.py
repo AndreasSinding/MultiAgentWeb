@@ -22,6 +22,17 @@ try:
 except Exception:
     HAS_PPT = False
 
+# Optional: hot-swap sqlite3 backend (Azure/Linux safe)
+USE_PYSQLITE3 = os.getenv("USE_PYSQLITE3", "0") == "1"
+if USE_PYSQLITE3:
+    try:
+        import pysqlite3 as sqlite3  # noqa: F401
+        import sys
+        sys.modules['sqlite3'] = sqlite3
+        print("Using pysqlite3-binary as sqlite3 backend")
+    except Exception as e:
+        print("WARNING: sqlite3 hot-swap failed:", e)
+
 load_dotenv(override=True)
 
 BASE = os.path.dirname(__file__)
