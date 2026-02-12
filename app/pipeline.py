@@ -4,6 +4,7 @@ import os
 import json
 import threading
 import importlib
+import traceback
 from typing import Dict, Any
 from fastapi import HTTPException
 
@@ -48,9 +49,12 @@ def build_llm_and_crew_once() -> Dict[str, Any]:
         CREW_STATE.update({"llm": llm, "crew": crew, "ready": True, "error": None})
 
     except Exception as e:
+                
+        tb = traceback.format_exc()
         CREW_STATE.update(
-            {"ready": False, "error": f"{type(e).__name__}: {e}"}
+            {"ready": False, "error": f"{type(e).__name__}: {e}\nTRACE:\n{tb}"}
         )
+
 
     return CREW_STATE
 
