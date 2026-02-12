@@ -6,7 +6,8 @@ import glob
 import yaml
 from typing import Dict, Any, Optional
 
-from crewai import Agent, Task, Crew, LLM, Process
+from crewai import Agent, Task, Crew, Process
+from litellm import completion
 
 # Import your tool classes
 from app.exa_tool import ExaSearchAndContents
