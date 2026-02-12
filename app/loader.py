@@ -41,17 +41,25 @@ def _read_yaml(path: str) -> Dict[str, Any]:
 # ---------------------------------------------------------------------
 # LLM LOADER
 # ---------------------------------------------------------------------
-def load_llm(llm_yaml_path: str) -> LLM:
+def load_llm(llm_yaml_path: str):
+    """Lazy import LLM to prevent circular import at module import time."""
+    try:
+        from app.models import LLM  # type: ignore
+    except Exception as e:
+        raise ImportError(f"Could not import LLM from app.models: {e}") from e
+
     data = _read_yaml(llm_yaml_path).get("llm", {})
-    key = os.getenv("GROQ_API_KEY")
+    api_key = os.getenv("GROQ_API_KEY")
+    if not api_key and data.get("api_key"):
+        api_key = data["api_key"]
+
     return LLM(
         provider=data.get("provider", "groq"),
         model=data.get("model", "llama-3.3-70b-versatile"),
-        api_key=key,
+        api_key=api_key,
         base_url=data.get("base_url", "https://api.groq.com/openai/v1"),
         temperature=data.get("temperature", 0.2),
     )
-
 
 # ---------------------------------------------------------------------
 # TOOL LOADER
