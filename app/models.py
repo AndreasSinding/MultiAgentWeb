@@ -1,3 +1,4 @@
+print("LOADING app.models.py...")
 
 from pydantic import BaseModel, Field
 from typing import List
