@@ -49,6 +49,23 @@ jobs:
           pip install -r requirements.txt
         # App Service will run Oryx and install again during deployment.
 
+       #############################################################################    
+       #Inserted 12.0226
+       
+      - name: Remove old artifacts
+        run: |
+          rm -rf dist
+          rm -rf build
+          rm -rf app/__pycache__
+          find . -name "__pycache__" -exec rm -rf {} +
+        
+      - name: Create deployment package
+        run: |
+          zip -r release.zip . -x "*.git*" -x "*__pycache__*" -x "*.pytest_cache*" -x ".venv/*" -x "antenv/*"
+
+      ######################################################################### 
+
+
       - name: Auto-fix HTML entities/backticks under ui/ 
         shell: bash
         run: |
