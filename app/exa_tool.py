@@ -3,7 +3,9 @@ import os
 import json
 from typing import List, Optional, Dict, Any
 from pydantic import BaseModel, Field
-from crewai_tools import BaseTool  # correct import
+#from crewai_tools import BaseTool  # correct import
+from app.base_tool import BaseTool
+
 # Note: we do not import `exa` at module top to keep import-time light
 
 DEFAULT_RESULTS = 5
