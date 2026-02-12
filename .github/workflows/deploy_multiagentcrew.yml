@@ -1,112 +1,80 @@
-name: Build and deploy (Oryx from source) - multiagentcrew
+#New deploy_multiagentcrew 
+# Remember to WEBSITE_RUN_FROM_PACKAGE = 1
+
+name: Deploy FastAPI to Azure Web App (Run from Package)
 
 on:
   push:
-    branches: [ multiagentsearch ]
-  workflow_dispatch:
-
-permissions:
-  contents: read
-  id-token: write
-
-concurrency:
-  group: multiagentcrew-prod-deploy
-  cancel-in-progress: true
-
-env:
-  AZURE_WEBAPP_NAME: multiagentcrew
-  PYTHON_VERSION: '3.11'
+    branches: [ main ]   # or your chosen branch
 
 jobs:
-  deploy:
-    runs-on: ubuntu-22.04
-    timeout-minutes: 45
+  build-and-deploy:
+    runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+    - name: Checkout
+      uses: actions/checkout@v4
 
-      - name: Set up Python (for sanity checks only)
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
 
-      - name: Ensure runtime.txt (forces Python detection)
-        run: |
-          if [ ! -f runtime.txt ]; then
-            echo "python-${{ env.PYTHON_VERSION }}" > runtime.txt
-          fi
-          cat runtime.txt
+    # Optional: build step only to validate deps locally; Azure will just run the package
+    - name: Validate dependencies
+      run: |
+        pip install -r requirements.txt
+        python -c "print('deps ok')"
 
-      - name: Verify requirements.txt exists at repo root
-        run: |
-          test -f requirements.txt || (echo "requirements.txt missing at repo root" && exit 1)
-          head -n 50 requirements.txt || true
+    - name: Sanity checks (block regressions)
+      run: |
+        # 1) Ensure the Exa tool no longer references crewai_tools
+        if grep -R "from crewai_tools import BaseTool" app/exa_tool.py; then
+          echo "ERROR: 'crewai_tools' import found in app/exa_tool.py"
+          exit 1
+        fi
+        # 2) Ensure our local BaseTool exists
+        test -f app/base_tool.py || (echo "ERROR: app/base_tool.py missing" && exit 1)
 
-      - name: Dependency sanity check (runner only)
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-        # App Service will run Oryx and install again during deployment.
+    - name: Create deployment package (zip CONTENTS, not the folder)
+      run: |
+        rm -f release.zip
+        # zip from repo root but exclude junk and caches
+        zip -r release.zip . \
+          -x "*.git*" \
+          -x "*__pycache__*" \
+          -x "*.pytest_cache*" \
+          -x ".venv/*" \
+          -x "antenv/*" \
+          -x "dist/*" \
+          -x "build/*"
 
-       #############################################################################    
-       #Inserted 12.0226
-       
-      - name: Remove old artifacts
-        run: |
-          rm -rf dist
-          rm -rf build
-          rm -rf app/__pycache__
-          find . -name "__pycache__" -exec rm -rf {} +
-        
-      - name: Create deployment package
-        run: |
-          zip -r release.zip . -x "*.git*" -x "*__pycache__*" -x "*.pytest_cache*" -x ".venv/*" -x "antenv/*"
+        echo "ZIP created:"
+        unzip -l release.zip | sed -n '1,40p'
 
-      ######################################################################### 
+    - name: Deploy to Azure Web App (Run-From-Package)
+      uses: azure/webapps-deploy@v3
+      with:
+        app-name: multiagentcrew-ebazexd2e0h7e4fh             # <-- your app
+        publish-profile: ${{ secrets.AZURE_PUBLISH_PROFILE }} # export from Azure Portal
+        package: release.zip
 
+    # Optional: force restart so a new /tmp/<id> is used immediately
+    - name: Restart Web App
+      uses: azure/cli@v2
+      with:
+        inlineScript: |
+          az webapp restart \
+            --resource-group "<YOUR_RESOURCE_GROUP>" \
+            --name "multiagentcrew-ebazexd2e0h7e4fh"
+      env:
+        AZURE_CLIENT_ID:     ${{ secrets.AZURE_CLIENT_ID }}
+        AZURE_TENANT_ID:     ${{ secrets.AZURE_TENANT_ID }}
+        AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
 
-      - name: Auto-fix HTML entities/backticks under ui/ 
-        shell: bash
-        run: |
-          set -euo pipefail
-          find ui -type f -name "*.py" -print0 | xargs -0 sed -i \
-            -e 's/-&gt;/->/g' \
-            -e 's/&gt;=/>=/g' \
-            -e 's/&gt;/>/g' \
-            -e 's/&lt;=/<=/g' \
-            -e 's/&lt;/</g' \
-            -e 's/&amp;/\&/g' \
-            -e 's/`//g'
-          if grep -RInE --exclude-dir='\.git' --exclude-dir='__pycache__' '(-&gt;|&gt;=|&lt;|&amp;|`)' ui | head -n 1; then
-            echo "WARNING: Some HTML entities/backticks may remain; attempting to continue..."
-          else
-            echo "No HTML entities/backticks found after auto-fix."
-          fi
-
-      - name: Quick static checks (compile)
-        run: |
-          python -m compileall -q .
-
-      - name: Sanity import test (routes & ppt builder)
-        run: |
-          python - <<'PY'
-          import importlib
-          # Will raise if names are wrong
-          importlib.import_module('ui.ppt_builder')
-          from ui.ppt_builder import _safe_filename, create_multislide_pptx
-          importlib.import_module('ui.routes_ppt')
-          print("Imports OK")
-          PY
-
-      # No Azure login step here — publish profile auth goes directly to the deploy action.
-      - name: Deploy to Azure Web App (source folder → Oryx build on server)
-        uses: azure/webapps-deploy@v3
-        with:
-          app-name: ${{ env.AZURE_WEBAPP_NAME }}
-          publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
-          package: .
-          clean: true
-          restart: true
-          # NOTE: startup-command is ignored with publish-profile auth; set it in Portal if needed.
-          
+    # Optional: smoke test
+    - name: Smoke test /status
+      run: |
+        # Wait a few seconds for warmup
+        sleep 10
+        curl -fsS https://multiagentcrew-ebazexd2e0h7e4fh.westeurope-01.azurewebsites.net/status || (echo "Status check failed" && exit 1)
