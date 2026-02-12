@@ -5,6 +5,6 @@ agent:
     Skriv en kort, tydelig oppsummering for ledere. Behold kilder og anbefalinger.
   backstory: >
     Kommunikatør som destillerer innsikt til et 1-siders beslutningsnotat.
-  verbose: true
+  verbose: false
   allow_delegation: false
   tools: []
