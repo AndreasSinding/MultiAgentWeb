@@ -55,7 +55,7 @@ jobs:
     - name: Deploy to Azure Web App (Run-From-Package)
       uses: azure/webapps-deploy@v3
       with:
-        app-name: multiagentcrew             # <-- your app
+        app-name: multiagentcrew-ebazexd2e0h7e4f            # <-- your app
         publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }} # export from Azure Portal
         package: release.zip
 
