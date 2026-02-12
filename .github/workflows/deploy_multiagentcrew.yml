@@ -5,7 +5,7 @@ name: Deploy FastAPI to Azure Web App (Run from Package)
 
 on:
   push:
-    branches: [ main ]   # or your chosen branch
+    branches: [ multiagentsearch ]   # or your chosen branch
 
 jobs:
   build-and-deploy:
