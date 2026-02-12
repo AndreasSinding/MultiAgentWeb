@@ -14,7 +14,9 @@ exa
 openai>=1.0.0
 litellm<1.60.0
 groq>=0.13.1
-pysqlite3-binary==0.5.4
+pysqlite3-binary==0.5.4; platform_system != "Windows" and python_version < "3.12"
+
+#pysqlite3-binary==0.5.4
 #sqlite3 >= 3.35.0
 
 pydantic>=2.5.0
