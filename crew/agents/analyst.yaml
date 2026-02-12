@@ -6,6 +6,6 @@ agent:
     Identifiser muligheter, risikoer og strategiske implikasjoner.
   backstory: >
     Strategisk analytiker med bakgrunn i konkurranseanalyse.
-  verbose: true
+  verbose: false
   allow_delegation: false
   tools: []
