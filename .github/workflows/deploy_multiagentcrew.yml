@@ -72,11 +72,11 @@ jobs:
     #    AZURE_TENANT_ID:     ${{ secrets.AZURE_TENANT_ID }}
     #    AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
 
-    #Smoke test with cackoff
+    #Smoke test with retries
     - name: Smoke test /status (retry for warmup, verbose diagnostics)
       shell: bash
       env:
-        APP_NAME: your-app-name   # <— set this to your web app name
+        APP_NAME: multiagentcrew   # <— set this to your web app name
         PATH_SUFFIX: /status      # change to /health or whatever your app exposes
       run: |
         set +e  # don't exit on first non-zero; we handle failures ourselves
