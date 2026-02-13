@@ -40,84 +40,77 @@ jobs:
           echo "ERROR: crewai_tools import detected in exa_tool.py"
           exit 1
         fi
-
         if [ ! -f app/base_tool.py ]; then
           echo "ERROR: base_tool.py missing"
           exit 1
         fi
 
     # -------------------------------------------------------
-    # PACKAGE APP (ZIP CONTENTS, NOT FOLDERS)
+    # PACKAGE APP (ZIP CONTENTS ONLY)
     # -------------------------------------------------------
     - name: Create deployment package
       run: |
         rm -f release.zip
         zip -r release.zip . \
-          -x "*.git*" \
-          -x "**/__pycache__/**" \
-          -x "*.pytest_cache*" \
-          -x ".venv/**" \
-          -x "antenv/**" \
-          -x "dist/**" \
-          -x "build/**"
+            -x "*.git*" \
+            -x "**/__pycache__/**" \
+            -x "*.pytest_cache*" \
+            -x ".venv/**" \
+            -x "antenv/**" \
+            -x "dist/**" \
+            -x "build/**"
 
         echo "ZIP created:"
         unzip -l release.zip | sed -n '1,40p'
 
     # -------------------------------------------------------
-    # DEPLOY
-    # Correct app-name based on your working public hostname!
+    # DEPLOY TO AZURE (APP NAME = multiagentcrew)
     # -------------------------------------------------------
     - name: Deploy to Azure Web App (Run-From-Package)
       id: deploy
       uses: azure/webapps-deploy@v3
       with:
-        # IMPORTANT — This must match your working endpoint exactly:
-        # https://multiagentcrew-ebazexd2e0h7e4fh.westeurope-01.azurewebsites.net
-        app-name: multiagentcrew-ebazexd2e0h7e4fh
+        app-name: multiagentcrew
         publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
         package: release.zip
 
     # -------------------------------------------------------
-    # SMOKE TEST (with retries + diagnostics)
-    # Using the dynamic deployment output URL (never hard-coded again)
+    # SMOKE TEST USING THE REAL DEPLOYMENT URL
     # -------------------------------------------------------
-    - name: Smoke Test (retry for warmup)
+    - name: Smoke Test /status (retry for warmup)
       shell: bash
       env:
-        HEALTH_PATH: /status   # change if your API uses /healthz or /docs
+        HEALTH_PATH: /status
       run: |
         set +e
 
-        # Get the URL emitted by azure/webapps-deploy
         SITE_URL="${{ steps.deploy.outputs.webapp-url }}"
         if [ -z "$SITE_URL" ]; then
-            echo "ERROR: deploy step did not produce webapp-url"
-            exit 2
+          echo "ERROR: deploy step produced no webapp-url output"
+          exit 2
         fi
 
         URL="${SITE_URL}${HEALTH_PATH}"
-
-        echo "Smoke-testing endpoint: $URL"
-        echo "Resolving DNS…"
+        echo "Smoke-testing: $URL"
 
         HOSTNAME=$(echo "$SITE_URL" | sed -E 's#https?://([^/]+)/?.*#\1#')
+        echo "Resolved hostname: $HOSTNAME"
         getent hosts "$HOSTNAME" || echo "DNS lookup failed (non-fatal)"
 
         max_attempts=30
         delay=10
 
         for i in $(seq 1 $max_attempts); do
-          echo "Attempt $i/$max_attempts…"
+          echo "Attempt $i/$max_attempts..."
           HTTP_CODE=$(curl -k -L -sS -o /tmp/body.txt -w "%{http_code}" "$URL")
           EXIT=$?
 
           if [[ $EXIT -ne 0 ]]; then
-            echo "curl exited with $EXIT; retrying in ${delay}s"
+            echo "curl exited with $EXIT; retrying in ${delay}s..."
           else
             echo "HTTP $HTTP_CODE"
             if [[ "$HTTP_CODE" == "200" ]]; then
-              echo "OK ✔"
+              echo "Application is healthy ✔"
               exit 0
             fi
           fi
@@ -126,23 +119,7 @@ jobs:
           if [[ $delay -lt 40 ]]; then delay=$((delay+2)); fi
         done
 
-        echo "❌ Smoke test failed after $max_attempts attempts"
-        echo "Last body (first 500 chars)"
+        echo "❌ Smoke test failed"
+        echo "Last response body (first 500 chars):"
         head -c 500 /tmp/body.txt || true
         exit 1
-
-    # -------------------------------------------------------
-    # OPTIONAL — ENABLE THESE FOR LIVE DEBUGGING
-    # -------------------------------------------------------
-    # - name: Azure Login (OIDC)
-    #   uses: azure/login@v2
-    #   with:
-    #     client-id: ${{ secrets.AZURE_CLIENT_ID }}
-    #     tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-    #     subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-    #
-    # - name: Tail Logs (30 sec)
-    #   if: failure()
-    #   run: timeout 30s az webapp log tail \
-    #       -n multiagentcrew-ebazexd2e0h7e4fh \
-    #       -g <YOUR_RESOURCE_GROUP>
