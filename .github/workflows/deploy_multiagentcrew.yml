@@ -73,25 +73,51 @@ jobs:
     #    AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
 
     #Smoke test with cackoff
-    - name: Smoke test /status (retry for warmup)
+    - name: Smoke test /status (retry for warmup, verbose diagnostics)
       shell: bash
       env:
-        SITE_URL: https://<your-app-name>.azurewebsites.net
+        APP_NAME: your-app-name   # <— set this to your web app name
+        PATH_SUFFIX: /status      # change to /health or whatever your app exposes
       run: |
+        set +e  # don't exit on first non-zero; we handle failures ourselves
+        BASE_URL="https://${APP_NAME}.azurewebsites.net"
+        URL="${BASE_URL}${PATH_SUFFIX}"
+    
         echo "Waiting for app warmup..."
-        max_attempts=20
+        echo "Probing ${URL}"
+    
+        # Basic DNS check
+        getent hosts "${APP_NAME}.azurewebsites.net" || echo "DNS lookup failed (non-fatal)"
+    
+        max_attempts=24   # ~4 minutes total
         delay=10
+    
         for i in $(seq 1 $max_attempts); do
-          code=$(curl -s -o /dev/null -w "%{http_code}" "$SITE_URL/status")
-          if [[ "$code" == "200" ]]; then
-            echo "Status check succeeded (HTTP 200)."
-            exit 0
+          # -k avoids TLS issues if chain not ready; remove if you prefer strict
+          # -S --show-error prints errors even when -s is used
+          # -L follows redirects (in case your app redirects to /health etc.)
+          HTTP_CODE=$(curl -k -L -sS -o /tmp/smoke_body.txt -w "%{http_code}" "$URL")
+          EXIT=$?
+    
+          if [[ $EXIT -ne 0 ]]; then
+            echo "Attempt $i/$max_attempts: curl exited with $EXIT; retrying in ${delay}s..."
+          else
+            echo "Attempt $i/$max_attempts: HTTP $HTTP_CODE"
+            if [[ "$HTTP_CODE" == "200" ]]; then
+              echo "Body (first 200 chars):"
+              head -c 200 /tmp/smoke_body.txt || true
+              echo
+              echo "✅ Status check succeeded."
+              exit 0
+            fi
           fi
-          echo "Attempt $i/$max_attempts: got HTTP $code; retrying in ${delay}s..."
-          sleep $delay
-          # optional backoff
+    
+          sleep "$delay"
+          # gentle backoff
           if [[ $delay -lt 30 ]]; then delay=$((delay+2)); fi
         done
-        echo "Status check failed after $max_attempts attempts."
+    
+        echo "❌ Status check failed after $max_attempts attempts."
+        echo "Last response body (first 500 chars):"
+        head -c 500 /tmp/smoke_body.txt || true
         exit 1
-
