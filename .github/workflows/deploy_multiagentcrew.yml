@@ -7,97 +7,76 @@ on:
     branches: [ multiagentsearch ]
 
 env:
-  # If your FastAPI app is in a subfolder (e.g., "multiagentcrew"),
-  # set APP_DIR to that folder name. If it's at repo root, leave it empty ("").
-  APP_DIR: ""                 # e.g., "multiagentcrew"
-  APP_NAME: multiagentcrew    # exact App Service resource name
-  HEALTH_PATH: /status        # change to /healthz or /docs if you prefer
+  APP_NAME: multiagentcrew
+  HEALTH_PATH: /status
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+    - name: Checkout
+      uses: actions/checkout@v4
 
-      # (Optional) quick structure peek to confirm where main.py & requirements.txt are
-      - name: Show repo structure (first 300 entries)
-        run: |
-          echo "PWD=$(pwd)"
-          find . -maxdepth 3 -type f -printf "%p\n" | sort | sed -n '1,300p'
+    # --- Show structure for debugging
+    - name: Show repo structure (first 200 entries)
+      run: |
+        echo "Repository root:"
+        find . -maxdepth 3 -type f -printf "%p\n" | sort | sed -n '1,200p'
 
-      # ---- ZIP the CONTENTS of APP_DIR (or repo root if empty) ----
-      - name: Create deployment package for Oryx (zip CONTENTS)
-        run: |
-          rm -f release.zip
-          if [ -n "${APP_DIR}" ]; then
-            echo "Zipping contents of ${APP_DIR}/"
-            cd "${APP_DIR}"
-            # requirements.txt MUST be visible here for Oryx to install deps
-            if [ ! -f requirements.txt ]; then
-              echo "ERROR: requirements.txt not found in ${APP_DIR}/"
-              exit 1
-            fi
-            zip -r ../release.zip . \
-              -x "*.git*" -x "**/__pycache__/**" -x "*.pytest_cache*" \
-              -x ".venv/**" -x "dist/**" -x "build/**"
-            cd -
-          else
-            echo "Zipping contents of repo root"
-            if [ ! -f requirements.txt ]; then
-              echo "ERROR: requirements.txt not found at repo root"
-              exit 1
-            fi
-            zip -r release.zip . \
-              -x "*.git*" -x "**/__pycache__/**" -x "*.pytest_cache*" \
-              -x ".venv/**" -x "dist/**" -x "build/**"
+    # --- Zip entire repo root (without .git etc.)
+    - name: Create deployment package (ZipDeploy + Oryx)
+      run: |
+        rm -f release.zip
+        zip -r release.zip . \
+          -x "*.git*" \
+          -x "**/__pycache__/**" \
+          -x "*.pytest_cache*" \
+          -x ".github/**" \
+          -x ".venv/**" \
+          -x "dist/**" \
+          -x "build/**"
+
+        echo "ZIP created (first 40 entries):"
+        unzip -l release.zip | sed -n '1,40p'
+
+    - name: Deploy to Azure Web App
+      id: deploy
+      uses: azure/webapps-deploy@v3
+      with:
+        app-name: ${{ env.APP_NAME }}
+        publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
+        package: release.zip
+
+    # --- Smoke test (retry)
+    - name: Smoke Test
+      shell: bash
+      env:
+        SITE_URL: ${{ steps.deploy.outputs.webapp-url }}
+        HEALTH_PATH: ${{ env.HEALTH_PATH }}
+      run: |
+        set +e
+        if [ -z "$SITE_URL" ]; then
+          echo "ERROR: deploy produced no webapp-url"
+          exit 2
+        fi
+
+        URL="${SITE_URL}${HEALTH_PATH}"
+        echo "Probing $URL"
+
+        max_attempts=30
+        delay=10
+
+        for i in $(seq 1 $max_attempts); do
+          echo "Attempt $i..."
+          HTTP_CODE=$(curl -k -L -sS -o /tmp/body.txt -w "%{http_code}" "$URL")
+          if [[ "$HTTP_CODE" == "200" ]]; then
+            echo "App healthy ✔"
+            exit 0
           fi
-          echo "ZIP created (first 40 entries):"
-          unzip -l release.zip | sed -n '1,40p'
+          sleep $delay
+        done
 
-      # ---- Deploy via publish profile (Python + Oryx will run server-side) ----
-      - name: Deploy to Azure Web App (Zip Deploy + Oryx)
-        id: deploy
-        uses: azure/webapps-deploy@v3
-        with:
-          app-name: ${{ env.APP_NAME }}
-          publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
-          package: release.zip
-
-      # ---- Probe the actual deployed URL (from action output) ----
-      - name: Smoke Test (retry for warmup)
-        shell: bash
-        env:
-          SITE_URL: ${{ steps.deploy.outputs.webapp-url }}
-          HEALTH_PATH: ${{ env.HEALTH_PATH }}
-        run: |
-          set +e
-          if [ -z "$SITE_URL" ]; then
-            echo "ERROR: deploy step produced no webapp-url"
-            exit 2
-          fi
-          URL="${SITE_URL}${HEALTH_PATH}"
-          echo "Smoke-testing: $URL"
-          HOSTNAME=$(echo "$SITE_URL" | sed -E 's#https?://([^/]+)/?.*#\1#')
-          getent hosts "$HOSTNAME" || echo "DNS lookup failed (non-fatal)"
-          max_attempts=30; delay=10
-          for i in $(seq 1 $max_attempts); do
-            echo "Attempt $i/$max_attempts..."
-            HTTP_CODE=$(curl -k -L -sS -o /tmp/body.txt -w "%{http_code}" "$URL")
-            EXIT=$?
-            if [[ $EXIT -ne 0 ]]; then
-              echo "curl exited with $EXIT; retrying in ${delay}s..."
-            else
-              echo "HTTP $HTTP_CODE"
-              if [[ "$HTTP_CODE" == "200" ]]; then
-                echo "Application is healthy ✔"
-                exit 0
-              fi
-            fi
-            sleep $delay
-            if [[ $delay -lt 40 ]]; then delay=$((delay+2)); fi
-          done
-          echo "❌ Smoke test failed"
-          echo "Last response body (first 500 chars):"
-          head -c 500 /tmp/body.txt || true
-          exit 1
+        echo "❌ App did not become ready"
+        head -c 500 /tmp/body.txt || true
+        exit 1
