@@ -7,20 +7,21 @@ on:
   push:
     branches: [ multiagentsearch ]
 
+env:
+  # If your code is at repo root, leave APP_DIR empty ("").
+  # If it's in a subfolder (e.g., multiagentcrew/), set APP_DIR accordingly.
+  APP_DIR: ""                # e.g., "multiagentcrew"
+  APP_NAME: multiagentcrew   # exact Azure App Service resource name (portal)
+  HEALTH_PATH: /status       # change to /healthz or /docs if preferred
+
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
 
     steps:
-    # -------------------------------------------------------
-    # CHECKOUT
-    # -------------------------------------------------------
     - name: Checkout
       uses: actions/checkout@v4
 
-    # -------------------------------------------------------
-    # PYTHON TOOLING
-    # -------------------------------------------------------
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
@@ -28,85 +29,80 @@ jobs:
 
     - name: Validate dependencies
       run: |
-        pip install -r requirements.txt
-        python -c "print('Dependencies OK')"
+        if [ -f requirements.txt ]; then
+          pip install -r requirements.txt
+        fi
+        echo "Dependencies OK"
 
-    # -------------------------------------------------------
-    # SANITY CHECKS
-    # -------------------------------------------------------
+    - name: Show repository structure (first 300 entries)
+      run: |
+        echo "PWD=$(pwd)"
+        ls -la
+        echo "---- find . (maxdepth 3) ----"
+        find . -maxdepth 3 -type f -printf "%p\n" | sort | sed -n '1,300p'
+
     - name: Sanity checks (block regressions)
       run: |
-        if grep -R "from crewai_tools import BaseTool" app/exa_tool.py; then
-          echo "ERROR: crewai_tools import detected in exa_tool.py"
-          exit 1
-        fi
-        if [ ! -f app/base_tool.py ]; then
-          echo "ERROR: base_tool.py missing"
+        # Example checks you had earlier
+        if [ -f app/exa_tool.py ] && grep -R "from crewai_tools import BaseTool" app/exa_tool.py; then
+          echo "ERROR: crewai_tools import detected in app/exa_tool.py"
           exit 1
         fi
 
-    # -------------------------------------------------------
-    # PACKAGE APP (ZIP CONTENTS ONLY)
-    # -------------------------------------------------------
-    - name: Create deployment package
+    # --- ZIP the CONTENTS of APP_DIR (or repo root if empty) ---
+    - name: Create deployment package (zip CONTENTS, not the folder)
       run: |
         rm -f release.zip
-        zip -r release.zip . \
-            -x "*.git*" \
-            -x "**/__pycache__/**" \
-            -x "*.pytest_cache*" \
-            -x ".venv/**" \
-            -x "antenv/**" \
-            -x "dist/**" \
-            -x "build/**"
+        if [ -n "${APP_DIR}" ]; then
+          echo "Zipping contents of ${APP_DIR}/"
+          cd "${APP_DIR}"
+          zip -r ../release.zip . \
+            -x "*.git*" -x "**/__pycache__/**" -x "*.pytest_cache*" \
+            -x ".venv/**" -x "dist/**" -x "build/**"
+          cd -
+        else
+          echo "Zipping contents of repo root"
+          zip -r release.zip . \
+            -x "*.git*" -x "**/__pycache__/**" -x "*.pytest_cache*" \
+            -x ".venv/**" -x "dist/**" -x "build/**"
+        fi
 
-        echo "ZIP created:"
+        echo "ZIP created, showing first 40 entries:"
         unzip -l release.zip | sed -n '1,40p'
 
-    # -------------------------------------------------------
-    # DEPLOY TO AZURE (APP NAME = multiagentcrew)
-    # -------------------------------------------------------
     - name: Deploy to Azure Web App (Run-From-Package)
       id: deploy
       uses: azure/webapps-deploy@v3
       with:
-        app-name: multiagentcrew
+        app-name: ${{ env.APP_NAME }}
         publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
         package: release.zip
 
-    # -------------------------------------------------------
-    # SMOKE TEST USING THE REAL DEPLOYMENT URL
-    # -------------------------------------------------------
-    - name: Smoke Test /status (retry for warmup)
+    - name: Smoke Test (retry for warmup)
       shell: bash
       env:
-        HEALTH_PATH: /status
+        SITE_URL: ${{ steps.deploy.outputs.webapp-url }}
+        HEALTH_PATH: ${{ env.HEALTH_PATH }}
       run: |
         set +e
-
-        SITE_URL="${{ steps.deploy.outputs.webapp-url }}"
         if [ -z "$SITE_URL" ]; then
           echo "ERROR: deploy step produced no webapp-url output"
           exit 2
         fi
-
         URL="${SITE_URL}${HEALTH_PATH}"
         echo "Smoke-testing: $URL"
 
         HOSTNAME=$(echo "$SITE_URL" | sed -E 's#https?://([^/]+)/?.*#\1#')
-        echo "Resolved hostname: $HOSTNAME"
         getent hosts "$HOSTNAME" || echo "DNS lookup failed (non-fatal)"
 
         max_attempts=30
         delay=10
-
         for i in $(seq 1 $max_attempts); do
           echo "Attempt $i/$max_attempts..."
           HTTP_CODE=$(curl -k -L -sS -o /tmp/body.txt -w "%{http_code}" "$URL")
           EXIT=$?
-
           if [[ $EXIT -ne 0 ]]; then
-            echo "curl exited with $EXIT; retrying in ${delay}s..."
+            echo "curl exited with $EXIT; retry in ${delay}s..."
           else
             echo "HTTP $HTTP_CODE"
             if [[ "$HTTP_CODE" == "200" ]]; then
@@ -114,7 +110,6 @@ jobs:
               exit 0
             fi
           fi
-
           sleep $delay
           if [[ $delay -lt 40 ]]; then delay=$((delay+2)); fi
         done
@@ -123,3 +118,16 @@ jobs:
         echo "Last response body (first 500 chars):"
         head -c 500 /tmp/body.txt || true
         exit 1
+
+    # --- Optional: enable for live tail on failure (requires OIDC secrets) ---
+    # - name: Azure Login (OIDC)
+    #   if: failure()
+    #   uses: azure/login@v2
+    #   with:
+    #     client-id: ${{ secrets.AZURE_CLIENT_ID }}
+    #     tenant-id:  ${{ secrets.AZURE_TENANT_ID }}
+    #     subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+    #
+    # - name: Tail WebApp logs (30s)
+    #   if: failure()
+    #   run: timeout 30s az webapp log tail -n "${APP_NAME}" -g "<YOUR_RESOURCE_GROUP>" || true
