@@ -60,17 +60,17 @@ jobs:
         package: release.zip
 
     # Optional: force restart so a new /tmp/<id> is used immediately
-    - name: Restart Web App
-      uses: azure/cli@v2
-      with:
-        inlineScript: |
-          az webapp restart \
-            --resource-group "<YOUR_RESOURCE_GROUP>" \
-            --name "multiagentcrew-ebazexd2e0h7e4fh"
-      env:
-        AZURE_CLIENT_ID:     ${{ secrets.AZURE_CLIENT_ID }}
-        AZURE_TENANT_ID:     ${{ secrets.AZURE_TENANT_ID }}
-        AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+    #- name: Restart Web App
+    #  uses: azure/cli@v2
+    #  with:
+    #    inlineScript: |
+    #      az webapp restart \
+    #        --resource-group "<YOUR_RESOURCE_GROUP>" \
+    #        --name "multiagentcrew-ebazexd2e0h7e4fh"
+    #  env:
+    #    AZURE_CLIENT_ID:     ${{ secrets.AZURE_CLIENT_ID }}
+    #    AZURE_TENANT_ID:     ${{ secrets.AZURE_TENANT_ID }}
+    #    AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
 
     # Optional: smoke test
     - name: Smoke test /status
