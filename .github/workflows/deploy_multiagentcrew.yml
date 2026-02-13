@@ -72,9 +72,26 @@ jobs:
     #    AZURE_TENANT_ID:     ${{ secrets.AZURE_TENANT_ID }}
     #    AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
 
-    # Optional: smoke test
-    - name: Smoke test /status
+    #Smoke test with cackoff
+    - name: Smoke test /status (retry for warmup)
+      shell: bash
+      env:
+        SITE_URL: https://<your-app-name>.azurewebsites.net
       run: |
-        # Wait a few seconds for warmup
-        sleep 10
-        curl -fsS https://multiagentcrew-ebazexd2e0h7e4fh.westeurope-01.azurewebsites.net/status || (echo "Status check failed" && exit 1)
+        echo "Waiting for app warmup..."
+        max_attempts=20
+        delay=10
+        for i in $(seq 1 $max_attempts); do
+          code=$(curl -s -o /dev/null -w "%{http_code}" "$SITE_URL/status")
+          if [[ "$code" == "200" ]]; then
+            echo "Status check succeeded (HTTP 200)."
+            exit 0
+          fi
+          echo "Attempt $i/$max_attempts: got HTTP $code; retrying in ${delay}s..."
+          sleep $delay
+          # optional backoff
+          if [[ $delay -lt 30 ]]; then delay=$((delay+2)); fi
+        done
+        echo "Status check failed after $max_attempts attempts."
+        exit 1
+
