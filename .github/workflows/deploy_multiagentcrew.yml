@@ -1,123 +1,148 @@
 #New deploy_multiagentcrew 
 # Remember to WEBSITE_RUN_FROM_PACKAGE = 1 
 
-name: Deploy FastAPI to Azure Web App (Run from Package)
+name: Deploy FastAPI to Azure Web App (Run-From-Package)
 
 on:
   push:
-    branches: [ multiagentsearch ]   # or your chosen branch
+    branches: [ multiagentsearch ]
 
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
 
     steps:
+    # -------------------------------------------------------
+    # CHECKOUT
+    # -------------------------------------------------------
     - name: Checkout
       uses: actions/checkout@v4
 
+    # -------------------------------------------------------
+    # PYTHON TOOLING
+    # -------------------------------------------------------
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
         python-version: '3.11'
 
-    # Optional: build step only to validate deps locally; Azure will just run the package
     - name: Validate dependencies
       run: |
         pip install -r requirements.txt
-        python -c "print('deps ok')"
+        python -c "print('Dependencies OK')"
 
+    # -------------------------------------------------------
+    # SANITY CHECKS
+    # -------------------------------------------------------
     - name: Sanity checks (block regressions)
       run: |
-        # 1) Ensure the Exa tool no longer references crewai_tools
         if grep -R "from crewai_tools import BaseTool" app/exa_tool.py; then
-          echo "ERROR: 'crewai_tools' import found in app/exa_tool.py"
+          echo "ERROR: crewai_tools import detected in exa_tool.py"
           exit 1
         fi
-        # 2) Ensure our local BaseTool exists
-        test -f app/base_tool.py || (echo "ERROR: app/base_tool.py missing" && exit 1)
 
-    - name: Create deployment package (zip CONTENTS, not the folder)
+        if [ ! -f app/base_tool.py ]; then
+          echo "ERROR: base_tool.py missing"
+          exit 1
+        fi
+
+    # -------------------------------------------------------
+    # PACKAGE APP (ZIP CONTENTS, NOT FOLDERS)
+    # -------------------------------------------------------
+    - name: Create deployment package
       run: |
         rm -f release.zip
-        # zip from repo root but exclude junk and caches
         zip -r release.zip . \
           -x "*.git*" \
-          -x "*__pycache__*" \
+          -x "**/__pycache__/**" \
           -x "*.pytest_cache*" \
-          -x ".venv/*" \
-          -x "antenv/*" \
-          -x "dist/*" \
-          -x "build/*"
+          -x ".venv/**" \
+          -x "antenv/**" \
+          -x "dist/**" \
+          -x "build/**"
 
         echo "ZIP created:"
         unzip -l release.zip | sed -n '1,40p'
 
+    # -------------------------------------------------------
+    # DEPLOY
+    # Correct app-name based on your working public hostname!
+    # -------------------------------------------------------
     - name: Deploy to Azure Web App (Run-From-Package)
+      id: deploy
       uses: azure/webapps-deploy@v3
       with:
-        app-name: multiagentcrew            # <-- your app
-        publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }} # export from Azure Portal
+        # IMPORTANT — This must match your working endpoint exactly:
+        # https://multiagentcrew-ebazexd2e0h7e4fh.westeurope-01.azurewebsites.net
+        app-name: multiagentcrew-ebazexd2e0h7e4fh
+        publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
         package: release.zip
 
-    # Optional: force restart so a new /tmp/<id> is used immediately
-    #- name: Restart Web App
-    #  uses: azure/cli@v2
-    #  with:
-    #    inlineScript: |
-    #      az webapp restart \
-    #        --resource-group "<YOUR_RESOURCE_GROUP>" \
-    #        --name "multiagentcrew-ebazexd2e0h7e4fh"
-    #  env:
-    #    AZURE_CLIENT_ID:     ${{ secrets.AZURE_CLIENT_ID }}
-    #    AZURE_TENANT_ID:     ${{ secrets.AZURE_TENANT_ID }}
-    #    AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
-
-    #Smoke test with retries
-    - name: Smoke test /status (retry for warmup, verbose diagnostics)
+    # -------------------------------------------------------
+    # SMOKE TEST (with retries + diagnostics)
+    # Using the dynamic deployment output URL (never hard-coded again)
+    # -------------------------------------------------------
+    - name: Smoke Test (retry for warmup)
       shell: bash
       env:
-        APP_NAME: multiagentcrew   # <— set this to your web app name
-        PATH_SUFFIX: /status      # change to /health or whatever your app exposes
+        HEALTH_PATH: /status   # change if your API uses /healthz or /docs
       run: |
-        set +e  # don't exit on first non-zero; we handle failures ourselves
-        BASE_URL="https://${APP_NAME}.azurewebsites.net"
-        URL="${BASE_URL}${PATH_SUFFIX}"
-    
-        echo "Waiting for app warmup..."
-        echo "Probing ${URL}"
-    
-        # Basic DNS check
-        getent hosts "${APP_NAME}.azurewebsites.net" || echo "DNS lookup failed (non-fatal)"
-    
-        max_attempts=24   # ~4 minutes total
+        set +e
+
+        # Get the URL emitted by azure/webapps-deploy
+        SITE_URL="${{ steps.deploy.outputs.webapp-url }}"
+        if [ -z "$SITE_URL" ]; then
+            echo "ERROR: deploy step did not produce webapp-url"
+            exit 2
+        fi
+
+        URL="${SITE_URL}${HEALTH_PATH}"
+
+        echo "Smoke-testing endpoint: $URL"
+        echo "Resolving DNS…"
+
+        HOSTNAME=$(echo "$SITE_URL" | sed -E 's#https?://([^/]+)/?.*#\1#')
+        getent hosts "$HOSTNAME" || echo "DNS lookup failed (non-fatal)"
+
+        max_attempts=30
         delay=10
-    
+
         for i in $(seq 1 $max_attempts); do
-          # -k avoids TLS issues if chain not ready; remove if you prefer strict
-          # -S --show-error prints errors even when -s is used
-          # -L follows redirects (in case your app redirects to /health etc.)
-          HTTP_CODE=$(curl -k -L -sS -o /tmp/smoke_body.txt -w "%{http_code}" "$URL")
+          echo "Attempt $i/$max_attempts…"
+          HTTP_CODE=$(curl -k -L -sS -o /tmp/body.txt -w "%{http_code}" "$URL")
           EXIT=$?
-    
+
           if [[ $EXIT -ne 0 ]]; then
-            echo "Attempt $i/$max_attempts: curl exited with $EXIT; retrying in ${delay}s..."
+            echo "curl exited with $EXIT; retrying in ${delay}s"
           else
-            echo "Attempt $i/$max_attempts: HTTP $HTTP_CODE"
+            echo "HTTP $HTTP_CODE"
             if [[ "$HTTP_CODE" == "200" ]]; then
-              echo "Body (first 200 chars):"
-              head -c 200 /tmp/smoke_body.txt || true
-              echo
-              echo "✅ Status check succeeded."
+              echo "OK ✔"
               exit 0
             fi
           fi
-    
-          sleep "$delay"
-          # gentle backoff
-          if [[ $delay -lt 30 ]]; then delay=$((delay+2)); fi
+
+          sleep $delay
+          if [[ $delay -lt 40 ]]; then delay=$((delay+2)); fi
         done
-    
-        echo "❌ Status check failed after $max_attempts attempts."
-        echo "Last response body (first 500 chars):"
-        head -c 500 /tmp/smoke_body.txt || true
+
+        echo "❌ Smoke test failed after $max_attempts attempts"
+        echo "Last body (first 500 chars)"
+        head -c 500 /tmp/body.txt || true
         exit 1
+
+    # -------------------------------------------------------
+    # OPTIONAL — ENABLE THESE FOR LIVE DEBUGGING
+    # -------------------------------------------------------
+    # - name: Azure Login (OIDC)
+    #   uses: azure/login@v2
+    #   with:
+    #     client-id: ${{ secrets.AZURE_CLIENT_ID }}
+    #     tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+    #     subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+    #
+    # - name: Tail Logs (30 sec)
+    #   if: failure()
+    #   run: timeout 30s az webapp log tail \
+    #       -n multiagentcrew-ebazexd2e0h7e4fh \
+    #       -g <YOUR_RESOURCE_GROUP>
