@@ -82,14 +82,38 @@ def health():
 # ------------------------------------------------------
 # Status
 # ------------------------------------------------------
-@app.get("/status")
-@app.get("/status/")
+# ------------------------------------------------------------
+# Health / Status endpoint (safe for Azure warmup checks)
+# ------------------------------------------------------------
+from fastapi import APIRouter
+
+# Optional: use a router to keep things clean
+health_router = APIRouter()
+
+@health_router.get("/status", tags=["health"])
+@health_router.get("/status/", tags=["health"])
 def status():
-    state = build_llm_and_crew_once()
+    """
+    Lightweight health endpoint for Azure / smoke tests.
+    - Does NOT initialize LLMs, crews, or heavy objects.
+    - Always returns quickly and reliably.
+    """
     return {
-        "crew_ready": bool(state.get("ready")),
-        "error": state.get("error"),
+        "status": "ok",
+        "message": "Service is running",
     }
+
+# Register router with your main FastAPI app
+app.include_router(health_router)
+
+#@app.get("/status") 
+#@app.get("/status/")
+#def status():
+#    state = build_llm_and_crew_once()
+#    return {
+#        "crew_ready": bool(state.get("ready")),
+#        "error": state.get("error"),
+#    }
 
 # ------------------------------------------------------
 # Request Schema
