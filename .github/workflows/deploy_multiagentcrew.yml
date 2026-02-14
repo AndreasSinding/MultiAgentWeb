@@ -1,5 +1,5 @@
-#New deploy_multiagentcrew 
-# Remember to WEBSITE_RUN_FROM_PACKAGE = 1  
+# New deploy_multiagentcrew
+# Remember to set WEBSITE_RUN_FROM_PACKAGE = 1 in App Service settings
 name: Deploy FastAPI to Azure Web App (Python + Oryx)
 
 on:
@@ -13,95 +13,96 @@ env:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-
     steps:
-    - name: Checkout
-      uses: actions/checkout@v4 
+      - name: Checkout
+        uses: actions/checkout@v4
 
-    # --- Show structure for debugging
-    - name: Show repo structure (first 200 entries)
-      run: |
-        echo "Repository root:"
-        find . -maxdepth 3 -type f -printf "%p\n" | sort | sed -n '1,200p'
+      # --- Show structure for debugging
+      - name: Show repo structure (first 200 entries)
+        shell: bash
+        run: |
+          echo "Repository root:"
+          # First 200 files up to depth 3
+          find . -maxdepth 3 -type f -print | sort | sed -n '1,200p'
 
-    # --- Zip entire repo root (without .git etc.)
-    - name: Create deployment package (ZipDeploy + Oryx)
-      run: |
-        rm -f release.zip
-        zip -r release.zip . \
-          -x "*.git*" \
-          -x "**/__pycache__/**" \
-          -x "*.pytest_cache*" \
-          -x ".github/**" \
-          -x ".venv/**" \
-          -x "dist/**" \
-          -x "build/**"
+      # --- Create deployment package (ZipDeploy + Oryx)
+      - name: Create deployment package (ZipDeploy + Oryx)
+        shell: bash
+        run: |
+          rm -f release.zip
+          zip -r release.zip . \
+            -x "*.git*" \
+            -x "**/__pycache__/**" \
+            -x "*.pytest_cache*" \
+            -x ".github/**" \
+            -x ".venv/**" \
+            -x "dist/**" \
+            -x "build/**"
 
-        echo "ZIP created (first 40 entries):"
-        unzip -l release.zip | sed -n '1,40p'
+          echo "ZIP created (first 40 entries):"
+          unzip -l release.zip | sed -n '1,40p'
 
-    - name: Deploy to Azure Web App
-      id: deploy
-      uses: azure/webapps-deploy@v3
-      with:
-        app-name: ${{ env.APP_NAME }}
-        publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
-        package: release.zip
+      - name: Deploy to Azure Web App
+        id: deploy
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: ${{ env.APP_NAME }}
+          publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
+          package: release.zip
 
-    # --- Smoke test (retry)
-     - name: Smoke Test (lightweight)
-      shell: bash
-      env:
-        SITE_URL: ${{ steps.deploy.outputs.webapp-url }}
-        HEALTH_PATH: ${{ env.HEALTH_PATH }}
-      run: |
-        set +e
-    
-        if [ -z "$SITE_URL" ]; then
-          echo "ERROR: deploy produced no webapp-url"
-          exit 2
-        fi
-    
-        URL="${SITE_URL}${HEALTH_PATH}"
-        echo "Probing $URL"
-    
-        # ---- CONFIG ----
-        MAX_ATTEMPTS=15          # Smaller than 30
-        INITIAL_WAIT=1           # Start with fast 1s retry
-        MAX_WAIT=8               # Never wait more than 8 seconds
-        CURL_TIMEOUT=3           # Timeout per curl request (was 10)
-        # -----------------
-    
-        attempt=1
-        wait=$INITIAL_WAIT
-    
-        while [ $attempt -le $MAX_ATTEMPTS ]; do
-          echo "Attempt $attempt (delay=${wait}s)..."
-    
-          # -k: ignore TLS, -sS: silent w/errors, -o: discard body
-          RESULT=$(curl -k -sS -m "$CURL_TIMEOUT" -o /tmp/body.txt -w "%{http_code}" "$URL")
-          echo "HTTP $RESULT"
-    
-          if [[ "$RESULT" == "200" ]]; then
-            echo "✔ App healthy"
-            exit 0
+      # --- Smoke test (lightweight, exponential backoff)
+      - name: Smoke Test (lightweight)
+        shell: bash
+        env:
+          SITE_URL: ${{ steps.deploy.outputs.webapp-url }}
+          HEALTH_PATH: ${{ env.HEALTH_PATH }}
+        run: |
+          set +e
+
+          if [ -z "$SITE_URL" ]; then
+            echo "ERROR: deploy produced no webapp-url"
+            exit 2
           fi
-    
-          # Fail fast on persistent 5xx (real crash)
-          if [[ "$RESULT" =~ ^5 ]] && [ $attempt -ge 5 ]; then
-            echo "❌ Still receiving 5xx after several attempts"
-            head -n 20 /tmp/body.txt || true
-            exit 1
-          fi
-    
-          sleep $wait
-          # Exponential backoff with ceiling
-          wait=$(( wait * 2 ))
-          if [ $wait -gt $MAX_WAIT ]; then wait=$MAX_WAIT; fi
-    
-          attempt=$(( attempt + 1 ))
-        done
-    
-        echo "❌ App not healthy after $MAX_ATTEMPTS attempts"
-        head -n 30 /tmp/body.txt || true
-        exit 1
+
+          URL="${SITE_URL}${HEALTH_PATH}"
+          echo "Probing $URL"
+
+          # ---- CONFIG ----
+          MAX_ATTEMPTS=15          # smaller than 30
+          INITIAL_WAIT=1           # start with fast 1s retry
+          MAX_WAIT=8               # never wait more than 8 seconds
+          CURL_TIMEOUT=3           # per-request timeout
+          # -----------------
+
+          attempt=1
+          wait=$INITIAL_WAIT
+
+          while [ $attempt -le $MAX_ATTEMPTS ]; do
+            echo "Attempt $attempt (delay=${wait}s)..."
+
+            # -k ignore TLS (Azure slot certs), -sS silent+errors, -m timeout, -o discard body
+            RESULT=$(curl -k -sS -m "$CURL_TIMEOUT" -o /tmp/body.txt -w "%{http_code}" "$URL")
+            echo "HTTP $RESULT"
+
+            if [[ "$RESULT" == "200" ]]; then
+              echo "✔ App healthy"
+              exit 0
+            fi
+
+            # Fail fast on persistent 5xx after a few tries
+            if [[ "$RESULT" =~ ^5 ]] && [ $attempt -ge 5 ]; then
+              echo "❌ Still receiving 5xx after several attempts"
+              head -n 20 /tmp/body.txt || true
+              exit 1
+            fi
+
+            sleep "$wait"
+            # Exponential backoff with ceiling
+            wait=$(( wait * 2 ))
+            if [ $wait -gt $MAX_WAIT ]; then wait=$MAX_WAIT; fi
+            attempt=$(( attempt + 1 ))
+          done
+
+          echo "❌ App not healthy after $MAX_ATTEMPTS attempts"
+          head -n 30 /tmp/body.txt || true
+          exit 1
