@@ -1,5 +1,5 @@
 #New deploy_multiagentcrew 
-# Remember to WEBSITE_RUN_FROM_PACKAGE = 1 
+# Remember to WEBSITE_RUN_FROM_PACKAGE = 1  
 name: Deploy FastAPI to Azure Web App (Python + Oryx)
 
 on:
