@@ -49,34 +49,59 @@ jobs:
         package: release.zip
 
     # --- Smoke test (retry)
-    - name: Smoke Test
+     - name: Smoke Test (lightweight)
       shell: bash
       env:
         SITE_URL: ${{ steps.deploy.outputs.webapp-url }}
         HEALTH_PATH: ${{ env.HEALTH_PATH }}
       run: |
         set +e
+    
         if [ -z "$SITE_URL" ]; then
           echo "ERROR: deploy produced no webapp-url"
           exit 2
         fi
-
+    
         URL="${SITE_URL}${HEALTH_PATH}"
         echo "Probing $URL"
-
-        max_attempts=30
-        delay=10
-
-        for i in $(seq 1 $max_attempts); do
-          echo "Attempt $i..."
-          HTTP_CODE=$(curl -k -L -sS -o /tmp/body.txt -w "%{http_code}" "$URL")
-          if [[ "$HTTP_CODE" == "200" ]]; then
-            echo "App healthy ✔"
+    
+        # ---- CONFIG ----
+        MAX_ATTEMPTS=15          # Smaller than 30
+        INITIAL_WAIT=1           # Start with fast 1s retry
+        MAX_WAIT=8               # Never wait more than 8 seconds
+        CURL_TIMEOUT=3           # Timeout per curl request (was 10)
+        # -----------------
+    
+        attempt=1
+        wait=$INITIAL_WAIT
+    
+        while [ $attempt -le $MAX_ATTEMPTS ]; do
+          echo "Attempt $attempt (delay=${wait}s)..."
+    
+          # -k: ignore TLS, -sS: silent w/errors, -o: discard body
+          RESULT=$(curl -k -sS -m "$CURL_TIMEOUT" -o /tmp/body.txt -w "%{http_code}" "$URL")
+          echo "HTTP $RESULT"
+    
+          if [[ "$RESULT" == "200" ]]; then
+            echo "✔ App healthy"
             exit 0
           fi
-          sleep $delay
+    
+          # Fail fast on persistent 5xx (real crash)
+          if [[ "$RESULT" =~ ^5 ]] && [ $attempt -ge 5 ]; then
+            echo "❌ Still receiving 5xx after several attempts"
+            head -n 20 /tmp/body.txt || true
+            exit 1
+          fi
+    
+          sleep $wait
+          # Exponential backoff with ceiling
+          wait=$(( wait * 2 ))
+          if [ $wait -gt $MAX_WAIT ]; then wait=$MAX_WAIT; fi
+    
+          attempt=$(( attempt + 1 ))
         done
-
-        echo "❌ App did not become ready"
-        head -c 500 /tmp/body.txt || true
+    
+        echo "❌ App not healthy after $MAX_ATTEMPTS attempts"
+        head -n 30 /tmp/body.txt || true
         exit 1
