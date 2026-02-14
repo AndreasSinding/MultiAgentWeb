@@ -97,7 +97,7 @@ def load_agents(agents_dir: str, llm: LLM, tools_by_name: Dict[str, Any]):
             backstory=y.get("backstory", ""),
             verbose=y.get("verbose", False),
             allow_delegation=y.get("allow_delegation", False),
-            memory = false,
+            memory = False,
             tools=tool_objs,
             llm=llm,
         )
