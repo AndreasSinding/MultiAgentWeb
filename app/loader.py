@@ -6,9 +6,6 @@ from typing import Dict, Any, Optional
 import yaml
 from dotenv import load_dotenv
 
-from crewai import Agent, Task, Crew, LLM, Process
-from crewai_tools import TavilySearchTool, SerperDevTool
-
 # <-- NEW: import your custom tool
 from app.exa_tool import ExaSearchAndContents
 
@@ -16,6 +13,21 @@ from app.exa_tool import ExaSearchAndContents
 from app.models import ResearchOutput, AnalysisOutput
 
 load_dotenv()
+
+# app/loader.py
+
+# 1) sqlite shim to satisfy chromadb (must be before crewai_tools import)
+try:
+    import pysqlite3  # provides sqlite3 >= 3.35
+    import sys
+    sys.modules["sqlite3"] = pysqlite3
+    sys.modules["sqlite"] = pysqlite3
+except Exception:
+    pass
+
+from crewai import Agent, Task, Crew, LLM, Process
+from crewai_tools import TavilySearchTool, SerperDevTool  # safe now
+
 
 # Map YAML schema names -> actual Pydantic classes
 SCHEMA_REGISTRY = {
@@ -93,6 +105,7 @@ def load_agents(agents_dir: str, llm: LLM, tools_by_name: Dict[str, Any]) -> Dic
       goal: "Find the best sources"
       backstory: "Expert web sleuth"
       verbose: true
+      memory: false
       allow_delegation: false
       tools: [exa, tavily]
     """
