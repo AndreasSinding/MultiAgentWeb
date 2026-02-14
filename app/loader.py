@@ -26,7 +26,7 @@ except Exception:
     pass
 
 from crewai import Agent, Task, Crew, LLM, Process
-from crewai_tools import TavilySearchTool, SerperDevTool  # safe now
+#from crewai_tools import TavilySearchTool, SerperDevTool  # safe now
 
 
 # Map YAML schema names -> actual Pydantic classes
@@ -38,8 +38,8 @@ SCHEMA_REGISTRY = {
 # Map YAML tool 'type' -> constructor
 # NOTE: keys are the 'type' values you'll put in the tool YAML.
 TOOL_REGISTRY = {
-    "TavilySearchTool": lambda cfg: TavilySearchTool(**(cfg or {})),
-    "SerperDevTool": lambda cfg: SerperDevTool(**(cfg or {})),
+    #"TavilySearchTool": lambda cfg: TavilySearchTool(**(cfg or {})),
+    #"SerperDevTool": lambda cfg: SerperDevTool(**(cfg or {})),
     # NEW: Exa tool (two aliases for convenience)
     "ExaSearchAndContents": lambda cfg: ExaSearchAndContents(**(cfg or {})),
     "exa_search_and_contents": lambda cfg: ExaSearchAndContents(**(cfg or {})),
