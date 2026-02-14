@@ -96,9 +96,16 @@ def _style_paragraph(p, size_pt: int = 18, font: str = "Segoe UI"):
 # --------------------------------------------------------------------
 # Section maps (NO + EN) and result shape helpers
 # --------------------------------------------------------------------
+# --------------------------------------------------------------------
+# Section maps (NO + EN) and result shape helpers
+# --------------------------------------------------------------------
 SECTION_MAP_NO = {
     "sammendrag": "summary",
     "trender": "trends",
+    # Norwegian synonyms
+    "nøkkelpunkter": "trends",     # new: route to trends
+    "nokkeltpunkter": "trends",    # ascii/typo fallback
+    "hovedfunn": "insights",       # often used for findings
     "innsikt": "insights",
     "muligheter": "opportunities",
     "risiko": "risks",
@@ -113,6 +120,10 @@ SECTION_MAP_NO = {
 SECTION_MAP_EN = {
     "executive summary": "summary",
     "key trends": "trends",
+    # English synonyms
+    "key points": "trends",
+    "highlights": "trends",
+    "findings": "insights",
     "market insights": "insights",
     "opportunities": "opportunities",
     "risks": "risks",
@@ -122,6 +133,7 @@ SECTION_MAP_EN = {
     "recommendations": "recommendations",
     "sources": "sources",
 }
+
 
 SECTION_KEYS = [
     "summary", "trends", "insights", "opportunities", "risks",
@@ -443,7 +455,8 @@ def _drop_bullet(s: str) -> str:
 
 
 def _find_urls(s: str) -> List[str]:
-    return re.findall(r'(https?://[^\s\)]+)', s or '')
+     return re.findall(r'(https?://[^\s\)]+)', s or '')
+
 
 
 def _split3(s: str):
@@ -738,6 +751,14 @@ def create_multislide_pptx(result: Dict[str, Any], topic: str, file_path: str) -
     # final cleanup pass (dedupe, normalization)
     sections = _clean_sections(sections)
 
+    
+    # NEW: If no structured 'numbers' were found, mine headline numbers from summary text
+    if not sections["numbers"]:
+         mined = _mine_numbers_from_text(sections.get("summary", ""))
+         if mined:
+             sections["numbers"].extend(mined)
+
+  
     prs = Presentation()
 
     # 1) Title
