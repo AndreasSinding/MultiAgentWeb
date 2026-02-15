@@ -140,10 +140,11 @@ def _split_recommendation(items: List[str]) -> Tuple[List[Optional[int]], List[s
             why.append(_strip(segs[1] if len(segs) > 1 else ""))
 
     return prio, act, why
+
 def _safe_filename(base: str) -> str:
     if not base:
         return "report"
-    return re.sub(r"[^A-Za-z0-9._-]+", "_", base).strip("_") or "report
+    return re.sub(r"[^A-Za-z0-9._-]+", "_", base).strip("_") or "report"
 
 from __future__ import annotations
 
