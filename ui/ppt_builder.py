@@ -110,30 +110,34 @@ def _split3(s: str) -> Tuple[str, str, str]:
     return _strip(parts[0]), _strip(parts[1]), _strip(parts[2])
 
 
-def _split_recommendation(items: List[str]) -> Tuple[List[int | None], List[str], List[str]]:
-#    prio: List[int | None], act: List[str], why: List[str] = [], [], []
-    
-# avoid shared mutable defaults
-    prio = [] if prio is None else prio
-    act  = [] if act  is None else act
-    why  = [] if why  is None else why
+def _strip(s: str) -> str:
+    return s.strip() if s is not None else ""
 
+def _split_recommendation(items: List[str]) -> Tuple[List[Optional[int]], List[str], List[str]]:
+    # Create fresh lists inside the function
+    prio: List[Optional[int]] = []
+    act: List[str] = []
+    why: List[str] = []
 
-  for it in items:
+    # Iterate over items
+    for it in items:
+        # Match e.g.: "[ prioritet 3 ] Do X — because Y"
         m = re.match(
-            r"^\[?\s*prioritet\s*(\d+)\s*\]?\s*(.+?)(?:\s+[\u2014\-]\s+(.+))?$", it, flags=re.I
+            r"^\[?\s*prioritet\s*(\d+)\s*\]?\s*(.+?)(?:\s+[\u2014\-]\s+(.+))?$",
+            it,
+            flags=re.I,
         )
         if m:
             prio.append(int(m.group(1)))
             act.append(_strip(m.group(2)))
             why.append(_strip(m.group(3) or ""))
         else:
-            prio.append(None)
+            # Fallback: split once on " — " (em dash) or " - "
             segs = re.split(r"\s+[\u2014\-]\s+", it, maxsplit=1)
             act.append(_strip(segs[0]))
             why.append(_strip(segs[1] if len(segs) > 1 else ""))
-    return prio, act, why
 
+    return prio, act, why
 
 def _safe_filename(base: str) -> str:
     if not base:
