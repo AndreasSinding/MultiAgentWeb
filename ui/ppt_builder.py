@@ -1,6 +1,163 @@
 # -*- coding: utf-8 -*-
 """
 ppt_builder.py — Robust, JSON-and-Markdown tolerant deck builder
+- Works with CrewAI multi-agent outputs (JSON + Markdown)
+- Defensive JSON parsing (no unguarded json.loads)
+- Understands Research task trend dicts: title / evidence / why_it_matters
+- Parses Norwegian AND English markdown headings
+- Stable 10-slide deck:
+  1) Title
+  2) Executive Summary
+  3) Key Trends
+  4) Market Insights
+  5) Opportunities
+  6) Risks
+  7) Competitors / Actors (table)
+  8) Key Numbers (table)
+  9) Recommendations
+  10) Sources
+"""
+
+from __future__ import annotations
+
+import json
+import re
+from typing import Any, Dict, List, Tuple
+
+
+# --------------------------------------------------------------------
+# Basic utils (safe for import time)
+# --------------------------------------------------------------------
+def _strip(x: Any) -> str:
+    """Robust strip that safely handles non-strings (int, float, None)."""
+    if x is None:
+        return ""
+    return str(x).strip()
+
+
+def _coerce_list(x: Any) -> List[Any]:
+    if x is None:
+        return []
+    return list(x) if isinstance(x, list) else [x]
+
+
+def _safe_json_loads(s: str):
+    """json.loads wrapper that never raises. Returns (obj, err)."""
+    try:
+        return json.loads(s), None
+    except Exception as e:
+        return None, e
+
+
+def _preclean_near_json(s: str) -> str:
+    """
+    Clean markdown bullets, code fences, and stray formatting before JSON parsing.
+    """
+    if not isinstance(s, str):
+        return ""
+    s = s.strip()
+    # Strip fenced ```json ... ``` or ``` ... ```
+    s = re.sub(r"```(?:json)?\s*([\s\S]*?)\s*```", r"\1", s, flags=re.I)
+    # Remove leading "-" or "*" bullets on each line
+    lines = [re.sub(r"^\s*[-*]\s+", "", ln) for ln in s.splitlines()]
+    return "\n".join(lines).strip()
+
+
+def _collect_strings_deep(obj: Any, limit: int = 20_000) -> List[str]:
+    """
+    Walk any dict/list and collect string-like values that look relevant.
+    Soft cap to avoid giant payloads.
+    """
+    out: List[str] = []
+
+    def walk(x: Any):
+        if isinstance(x, str):
+            if x.strip():
+                out.append(x.strip())
+        elif isinstance(x, dict):
+            for v in x.values():
+                walk(v)
+        elif isinstance(x, list):
+            for v in x:
+                walk(v)
+
+    walk(obj)
+    # mild dedupe + cap
+    seen, res, total = set(), [], 0
+    for s in out:
+        if s in seen:
+            continue
+        seen.add(s)
+        res.append(s)
+        total += len(s)
+        if total > limit:
+            break
+    return res
+
+
+def _drop_bullet(s: str) -> str:
+    # Remove bullets like -, *, •, and ordered lists "1.", "1)"
+    return re.sub(r"^\s*(?:[-*•]|\d+[.)])\s+", "", s or "").strip()
+
+
+def _find_urls(s: str) -> List[str]:
+    return re.findall(r"(https?://[^\s\)]+)", s or "")
+
+
+def _split3(s: str) -> Tuple[str, str, str]:
+    parts = re.split(r"\s+[\u2013\-;:]\s+", s or "", maxsplit=2)
+    parts += ["", "", ""]
+    return _strip(parts[0]), _strip(parts[1]), _strip(parts[2])
+
+
+def _split_recommendation(items: List[str]) -> Tuple[List[int | None], List[str], List[str]]:
+    prio: List[int | None], act: List[str], why: List[str] = [], [], []
+    for it in items:
+        m = re.match(
+            r"^\[?\s*prioritet\s*(\d+)\s*\]?\s*(.+?)(?:\s+[\u2014\-]\s+(.+))?$", it, flags=re.I
+        )
+        if m:
+            prio.append(int(m.group(1)))
+            act.append(_strip(m.group(2)))
+            why.append(_strip(m.group(3) or ""))
+        else:
+            prio.append(None)
+            segs = re.split(r"\s+[\u2014\-]\s+", it, maxsplit=1)
+            act.append(_strip(segs[0]))
+            why.append(_strip(segs[1] if len(segs) > 1 else ""))
+    return prio, act, why
+
+
+def _safe_filename(base: str) -> str:
+    if not base:
+        return "report"
+    return re.sub(r"[^A-Za-z0-9._-]+", "_", base).strip("_") or "report"
+
+
+# --------------------------------------------------------------------
+# Section maps (NO + EN) and result shape helpers
+# --------------------------------------------------------------------
+SECTION_MAP_NO = {
+    "sammendrag": "summary",
+    "trender": "trends",
+    # Norwegian synonyms
+    "nøkkelpunkter": "trends",
+    "nokkeltpunkter": "trends",  # ascii/typo fallback
+    "hovedfunn": "insights",  # findings
+    "innsikt": "insights",
+    "muligheter": "opportunities",
+    "risiko": "risks",
+    "aktører / konkurrenter": "competitors",
+    "aktorer / konkurrenter": "competitors",  # ascii fallback
+    "nøkkeltall": "numbers",
+    "nokkelstall": "numbers",  # ascii fallback
+    "anbefalinger": "recommendations",
+    "kilder": "sources",
+}
+
+# -*- coding: utf-8 -*-
+"""
+ppt_builder.py — Robust, JSON-and-Markdown tolerant deck builder
 
 - Works with CrewAI multi-agent outputs (JSON + Markdown)
 - Defensive JSON parsing (no unguarded json.loads)
@@ -732,7 +889,7 @@ def create_multislide_pptx(result: Dict[str, Any], topic: str, file_path: str) -
     data, tasks_output = _dig_outputs(result)
 
     # consider many potential stringy fields
-    also_consider = []List[str] = []
+    also_consider: List[str] = []
     if isinstance(data, dict):
         # common keys
         for k in ("summary", "final_output", "raw", "content", "text"):
