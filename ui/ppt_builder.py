@@ -111,8 +111,15 @@ def _split3(s: str) -> Tuple[str, str, str]:
 
 
 def _split_recommendation(items: List[str]) -> Tuple[List[int | None], List[str], List[str]]:
-    prio: List[int | None], act: List[str], why: List[str] = [], [], []
-    for it in items:
+#    prio: List[int | None], act: List[str], why: List[str] = [], [], []
+    
+# avoid shared mutable defaults
+    prio = [] if prio is None else prio
+    act  = [] if act  is None else act
+    why  = [] if why  is None else why
+
+
+  for it in items:
         m = re.match(
             r"^\[?\s*prioritet\s*(\d+)\s*\]?\s*(.+?)(?:\s+[\u2014\-]\s+(.+))?$", it, flags=re.I
         )
