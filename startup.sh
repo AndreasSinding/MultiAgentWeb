@@ -1,6 +1,6 @@
 
 
-#!/usr/bin/env bash
+#!/usr/bin/env bash 
 set -euo pipefail
 
 # Azure provides $PORT; default to 8000 for local runs
