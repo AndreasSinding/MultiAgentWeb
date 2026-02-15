@@ -1,136 +1,144 @@
-# ui/routes_ppt.py
-from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import FileResponse
-from pydantic import BaseModel
-from typing import Dict, Any
-import os
-import time
-import tempfile
+# -*- coding: utf-8 -*-
+"""
+Safe PPT routes for FastAPI.
+
+- Import-safe: no heavy imports at module scope.
+- Binary responses use StreamingResponse (no response_model).
+- Work is offloaded to a threadpool (python-pptx is CPU-bound and file I/O).
+- Filenames are sanitized; temporary files are cleaned up.
+
+Mount in main.py (behind an env flag):
+    ENABLE_PPT_ROUTES = os.getenv("ENABLE_PPT_ROUTES", "0") == "1"
+    if ENABLE_PPT_ROUTES:
+        from ui.routes_ppt import router as ppt_router
+        app.include_router(ppt_router)
+"""
+
+from __future__ import annotations
+
+import io
 import json
+import os
+import re
+import tempfile
+import time
+from typing import Any, Dict, Optional
 
-import inspect, logging, ui.ppt_builder as _ppt_b
-logging.warning("PPT builder loaded from: %s", inspect.getsourcefile(_ppt_b))
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, Field
+from starlette.concurrency import run_in_threadpool
+from starlette.responses import StreamingResponse
 
-# Import your pipeline and builder
-from app.pipeline import run_crew_pipeline
-from ui.ppt_builder import create_multislide_pptx   # adjust module name if different
+router = APIRouter(prefix="/ppt", tags=["ppt"])
 
-router = APIRouter(prefix="/reports", tags=["Reports"])
 
-class RunRequest(BaseModel):
-    topic: str
+# ----------------------------- Models -----------------------------
 
-def _safe_filename(base: str) -> str:
-    import re
-    if not base:
-        return "report"
-    return re.sub(r'[^A-Za-z0-9._-]+', '_', base).strip('_') or "report"
+class BuildPptRequest(BaseModel):
+    """Payload expected from your multi-agent pipeline output."""
+    topic: str = Field(..., min_length=1, max_length=300, description="Report topic/title")
+    result: Dict[str, Any] = Field(..., description="Crew/pipeline result (JSON dict)")
+    filename: Optional[str] = Field(
+        None,
+        description="Optional base file name without extension; defaults to sanitized topic",
+        max_length=120,
+    )
 
-# --- 1) One-shot: run crew now -> build PPTX -> return file
-@router.get("/diag/from-latest")
-def diag_from_latest():
-    import json, inspect
-    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-    latest_path = os.path.join(project_root, "runs", "latest_output.json")
-    if not os.path.exists(latest_path):
-        raise HTTPException(status_code=404, detail="No runs/latest_output.json")
-    with open(latest_path, "r", encoding="utf-8") as f:
-        result = json.load(f)
-
-    # extract
-    from ui.ppt_builder import _extract_all_json_blocks  # type: ignore
-    data = result.get("result", {}) or result
-    sections = _extract_all_json_blocks(data.get("tasks_output", []), also_consider=[
-        data.get("summary"), data.get("final_output"), data.get("raw"), data.get("content"), data.get("text")
-    ])
-
-    # show counts and one sample
-    preview = {k: (len(v) if isinstance(v, list) else (len(v) if isinstance(v, str) else 0)) for k, v in sections.items()}
-    return {
-        "builder_loaded": inspect.getsourcefile(_extract_all_json_blocks),
-        "section_counts": preview,
-        "sample": {
-            "summary": sections["summary"][:200] if isinstance(sections["summary"], str) else "",
-            "trends_0": sections["trends"][0] if sections["trends"] else "",
-            "insights_0": sections["insights"][0] if sections["insights"] else "",
-            "opportunities_0": sections["opportunities"][0] if sections["opportunities"] else "",
-            "risks_0": sections["risks"][0] if sections["risks"] else "",
-            "competitors_0": sections["competitors"][0] if sections["competitors"] else "",
-            "numbers_0": sections["numbers"][0] if sections["numbers"] else "",
-            "recommendations_0": sections["recommendations"][0] if sections["recommendations"] else "",
-            "sources_0": sections["sources"][0] if sections["sources"] else "",
-        }
-    }
-    
-@router.post("/pptx")
-def create_pptx_from_run(req: RunRequest):
-    try:
-        # 1) Run the crew pipeline
-        result: Dict[str, Any] = run_crew_pipeline(req.topic)  # pass-through; builder handles wrapped/unwrapped
-
-        # 2) Best-effort: persist latest_output.json for diagnostics
+    # Optional guard to prevent accidental huge payloads (adjust as needed)
+    @property
+    def approx_size_bytes(self) -> int:
         try:
-            project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-            runs_dir = os.path.join(project_root, "runs")
-            os.makedirs(runs_dir, exist_ok=True)
-            out_json = os.path.join(runs_dir, "latest_output.json")
-            with open(out_json, "w", encoding="utf-8") as f:
-                json.dump(result, f, ensure_ascii=False, indent=2)
-        except Exception as _e:
-            # Do not fail the request if persistence fails
-            logging.warning("Could not persist latest_output.json: %s", _e)
+            return len(json.dumps(self.result)) + len(self.topic)
+        except Exception:
+            return 0
 
-        # 3) Build PPT into a temp file
-        safe = _safe_filename(req.topic)
-        ts = time.strftime("%Y%m%d-%H%M%S")
-        tmp_dir = tempfile.mkdtemp(prefix="ppt_")
-        out_path = os.path.join(tmp_dir, f"{safe}_{ts}.pptx")
 
-        create_multislide_pptx(result, req.topic, out_path)
+# ----------------------------- Helpers -----------------------------
 
-        # 4) Return the file
-        return FileResponse(
-            out_path,
-            media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-            filename=os.path.basename(out_path),
-        )
+_SAFE_NAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
 
-    except HTTPException:
-        # Bubble up explicit FastAPI errors
-        raise
-    except Exception as e:
-        # Catch-all for unexpected issues in pipeline or PPT build
-        raise HTTPException(status_code=500, detail=f"Failed to create PPTX: {e}")
-        
-# --- 2) Convenience: reuse the "latest" stored JSON -> build PPTX
-@router.get("/pptx/from-latest")
-def create_pptx_from_latest(topic: str = Query(..., description="Title/topic shown on the Title slide")):
+
+def _safe_filename(name: Optional[str]) -> str:
+    base = (name or "report").strip().strip("._")
+    base = _SAFE_NAME_RE.sub("_", base) or "report"
+    return base[:120]  # keep it OS/zip-safe
+
+
+def _build_ppt_to_bytes(topic: str, result: Dict[str, Any], desired_name: Optional[str]) -> bytes:
     """
-    Reads runs/latest_output.json (written by your pipeline) and builds a PPTX.
+    Work function executed in a threadpool:
+      - lazy-imports python-pptx and your builder
+      - writes to a temp file
+      - returns the file bytes
+      - cleans up temp files/dir
     """
+    # Lazy import (so module import does not pull python-pptx)
+    from app.ppt_builder import create_multislide_pptx
+
+    tmpdir = tempfile.mkdtemp(prefix="pptx_")
     try:
-        base_dir = os.path.dirname(__file__)
-        project_root = os.path.abspath(os.path.join(base_dir, ".."))  # adjust if needed
-        latest_path = os.path.join(project_root, "runs", "latest_output.json")
-        if not os.path.exists(latest_path):
-            raise HTTPException(status_code=404, detail="No previous run stored (runs/latest_output.json missing).")
+        # Compose a temp filename
+        stamp = int(time.time())
+        base = _safe_filename(desired_name or topic or "report")
+        out_path = os.path.join(tmpdir, f"{base}_{stamp}.pptx")
 
-        import json
-        with open(latest_path, "r", encoding="utf-8") as f:
-            result = json.load(f)
+        # Build and read
+        create_multislide_pptx(result=result, topic=topic, file_path=out_path)
+        with open(out_path, "rb") as f:
+            data = f.read()
+        return data
+    finally:
+        # Best-effort cleanup
+        try:
+            for name in os.listdir(tmpdir):
+                try:
+                    os.remove(os.path.join(tmpdir, name))
+                except Exception:
+                    pass
+            os.rmdir(tmpdir)
+        except Exception:
+            pass
 
-        safe = _safe_filename(topic)
-        ts = time.strftime("%Y%m%d-%H%M%S")
-        tmp_dir = tempfile.mkdtemp(prefix="ppt_")
-        out_path = os.path.join(tmp_dir, f"{safe}_{ts}.pptx")
 
-        create_multislide_pptx(result, topic, out_path)
-        return FileResponse(
-            out_path,
-            media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-            filename=os.path.basename(out_path),
-        )
+# ----------------------------- Routes -----------------------------
+
+@router.get("/ping", summary="Lightweight PPT router health")
+def ping() -> Dict[str, str]:
+    return {"ok": "ppt-router-alive"}
+
+
+@router.post(
+    "/build",
+    response_class=StreamingResponse,
+    summary="Build a PPTX from a multi-agent result",
+    description=(
+        "Creates a multi-slide PPTX using the server-side builder. "
+        "Returns a binary stream with the correct PPTX content type and a safe download filename."
+    ),
+)
+async def build_ppt(req: BuildPptRequest):
+    # Optional payload size guard (tune thresholds for your scenario)
+    if req.approx_size_bytes and req.approx_size_bytes > 5 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Payload too large for PPT build")
+
+    # Run CPU/file-bound work outside the event loop
+    try:
+        blob: bytes = await run_in_threadpool(_build_ppt_to_bytes, req.topic, req.result, req.filename)
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to create PPTX from latest: {e}")
+        # Avoid leaking internal details; keep it concise
+        raise HTTPException(status_code=500, detail=f"PPT build failed: {e}")
+
+    # Compose a user-facing filename (safe and capped)
+    download_name = _safe_filename(req.filename or req.topic) + ".pptx"
+
+    return StreamingResponse(
+        io.BytesIO(blob),
+        media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        headers={
+            "Content-Disposition": f'attachment; filename="{download_name}"',
+            # Optional: add cache headers if you want browser caching behavior
+            "Cache-Control": "no-store",
+        },
+    )
