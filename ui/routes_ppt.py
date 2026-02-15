@@ -73,7 +73,7 @@ def _build_ppt_to_bytes(topic: str, result: Dict[str, Any], desired_name: Option
       - cleans up temp files/dir
     """
     # Lazy import (so module import does not pull python-pptx)
-    from app.ppt_builder import create_multislide_pptx
+    from ui.ppt_builder import create_multislide_pptx
 
     tmpdir = tempfile.mkdtemp(prefix="pptx_")
     try:
