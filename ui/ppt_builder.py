@@ -24,6 +24,10 @@ import json
 import re
 from typing import Any, Dict, List, Tuple
 
+from pptx import Presentation
+from pptx.util import Inches, Pt
+from pptx.enum.text import PP_ALIGN
+
 
 # --------------------------------------------------------------------
 # Basic utils (safe for import time)
@@ -139,60 +143,9 @@ def _split_recommendation(items: List[str]) -> Tuple[List[Optional[int]], List[s
 def _safe_filename(base: str) -> str:
     if not base:
         return "report"
-    return re.sub(r"[^A-Za-z0-9._-]+", "_", base).strip("_") or "report"
+    return re.sub(r"[^A-Za-z0-9._-]+", "_", base).strip("_") or "report
 
-
-# --------------------------------------------------------------------
-# Section maps (NO + EN) and result shape helpers
-# --------------------------------------------------------------------
-SECTION_MAP_NO = {
-    "sammendrag": "summary",
-    "trender": "trends",
-    # Norwegian synonyms
-    "nøkkelpunkter": "trends",
-    "nokkeltpunkter": "trends",  # ascii/typo fallback
-    "hovedfunn": "insights",  # findings
-    "innsikt": "insights",
-    "muligheter": "opportunities",
-    "risiko": "risks",
-    "aktører / konkurrenter": "competitors",
-    "aktorer / konkurrenter": "competitors",  # ascii fallback
-    "nøkkeltall": "numbers",
-    "nokkelstall": "numbers",  # ascii fallback
-    "anbefalinger": "recommendations",
-    "kilder": "sources",
-}
-
-# -*- coding: utf-8 -*-
-"""
-ppt_builder.py — Robust, JSON-and-Markdown tolerant deck builder
-
-- Works with CrewAI multi-agent outputs (JSON + Markdown)
-- Defensive JSON parsing (no unguarded json.loads)
-- Understands Research task trend dicts: title / evidence / why_it_matters
-- Parses Norwegian AND English markdown headings
-- Stable 10-slide deck:
-  1) Title
-  2) Executive Summary
-  3) Key Trends
-  4) Market Insights
-  5) Opportunities
-  6) Risks
-  7) Competitors / Actors (table)
-  8) Key Numbers (table)
-  9) Recommendations
- 10) Sources
-"""
 from __future__ import annotations
-
-import json
-import re
-from typing import Any, Dict, List
-
-from pptx import Presentation
-from pptx.util import Inches, Pt
-from pptx.enum.text import PP_ALIGN
-
 
 # --------------------------------------------------------------------
 # JSON sanitization & safe parsing
