@@ -1,16 +1,19 @@
-#!/usr/bin/env bash
-set -e
 
-# Ask Oryx to generate the startup script. This step:
-#  - reads /home/site/wwwroot/oryx-manifest.toml
-#  - EXTRACTS /home/site/wwwroot/output.tar.gz to /tmp/<hash>
-#  - creates /opt/startup/startup.sh that activates the venv and calls our command
+
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Azure provides $PORT; default to 8000 for local runs
+PORT="${PORT:-8000}"
+
+# Ask Oryx to generate an app startup script into /opt/startup/startup.sh
+# - It will unpack your build into /tmp/<hash>, activate the antenv, and run our command.
 oryx create-script \
   -appPath /home/site/wwwroot \
   -output /opt/startup/startup.sh \
   -virtualEnvName antenv \
   -defaultApp /opt/defaultsite \
-  -userStartupCommand "gunicorn -k uvicorn.workers.UvicornWorker -w 2 -t 120 -b 0.0.0.0:8000 main:app"
+  -userStartupCommand "gunicorn main:app -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:${PORT} --timeout 600 --workers 1"
 
-# Now run the script Oryx generated
+# Now execute the script Oryx generated
 exec /bin/bash /opt/startup/startup.sh
