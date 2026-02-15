@@ -12,7 +12,7 @@ crewai_tools>=0.12.0
 openai>=1.0.0
 litellm<1.60.0
 groq>=0.13.1
-python-pptx
+python-pptx 
 
 # Avoid pysqlite3-binary on Windows; keep it for non-Windows (optional)
 pysqlite3-binary==0.5.4; platform_system != "Windows" and python_version < "3.12"
