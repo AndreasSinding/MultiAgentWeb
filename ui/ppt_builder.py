@@ -840,14 +840,6 @@ def create_multislide_pptx(result: Dict[str, Any], topic: str, file_path: str) -
     # final cleanup pass (dedupe, normalization)
     sections = _clean_sections(sections)
 
-    
-    # NEW: If no structured 'numbers' were found, mine headline numbers from summary text
-    #if not sections["numbers"]:
-    #     mined = _mine_numbers_from_text(sections.get("summary", ""))
-    #     if mined:
-    #         sections["numbers"].extend(mined)
-
-  
     prs = Presentation()
 
     # 1) Title
