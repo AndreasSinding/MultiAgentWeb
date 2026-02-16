@@ -31,12 +31,6 @@ from pptx.enum.text import PP_ALIGN
 # --------------------------------------------------------------------
 # Basic utils (safe for import time)
 # --------------------------------------------------------------------
-def _strip(x: Any) -> str:
-    """Robust strip that safely handles non-strings (int, float, None)."""
-    if x is None:
-        return ""
-    return str(x).strip()
-
 
 def _coerce_list(x: Any) -> List[Any]:
     if x is None:
@@ -113,8 +107,11 @@ def _split3(s: str) -> Tuple[str, str, str]:
     return _strip(parts[0]), _strip(parts[1]), _strip(parts[2])
 
 
-def _strip(s: str) -> str:
-    return s.strip() if s is not None else ""
+def _strip(x: Any) -> str:
+    """Robust strip that safely handles non-strings (int, float, None)."""
+    if x is None:
+        return ""
+    return str(x).strip()
 
 def _split_recommendation(items: List[str]) -> Tuple[List[Optional[int]], List[str], List[str]]:
     prio: List[Optional[int]] = []
@@ -558,14 +555,6 @@ def _extract_from_markdown_en(merged: Dict[str, Any], s: str) -> None:
 
     flush(); flush()
 
-
-def _drop_bullet(s: str) -> str:
-    # -, *, •, "1.", "1)"
-    return re.sub(r'^(-|\*|•|\d+[.)])\s+', '', s).strip()
-
-
-def _find_urls(s: str) -> List[str]:
-     return re.findall(r'(https?://[^\s\)]+)', s or '')
 
 
 # --------------------------------------------------------------------
