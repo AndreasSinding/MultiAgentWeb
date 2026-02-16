@@ -7,7 +7,12 @@ task:
     Bruk kun verktøyet "exasearchandcontents" med maks 3 kall totalt (helst 1–2).
     Hent maks 5 resultater per søk og maks 5 sider med innhold.
     Hvis du ikke kan produsere gyldig JSON, lever {}.
+
   agent: Market Researcher
-  expected_output: >
-    Lever KUN gyldig JSON. Ingen tekst før eller etter JSON.
+
+  # IMPORTANT: loader._schema_from_name() will look this up in SCHEMA_REGISTRY
   output_schema: ResearchOutput
+
+  expected_output: >
+    Lever KUN gyldig JSON som matcher ResearchOutput-skjemaet.
+    Ingen tekst før eller etter JSON.
