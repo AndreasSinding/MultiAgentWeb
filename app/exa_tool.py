@@ -1,20 +1,29 @@
 # app/exa_tool.py
 from __future__ import annotations
+
 import os
 import json
 from datetime import datetime, timedelta
-from typing import List, Optional, Dict, Any, Tuple
+from typing import List, Optional, Dict, Any
+
+# --- CrewAI BaseTool: support both layouts (older/newer releases) ---
+try:
+    from crewai.tools import BaseTool  # e.g., CrewAI 1.8.x+
+except Exception:
+    from crewai_tools import BaseTool  # fallback for older setups
 
 from pydantic import BaseModel, Field, PrivateAttr
-from crewai.tools import BaseTool  # CrewAI 1.8.x+
 
-# Exa SDK (Python). Docs: https://exa.ai/docs/sdks/python-sdk
-# pip install exa-py
-from exa_py import Exa  # ← correct import per SDK
+# --- Optional Exa SDK import (guarded) ---
+try:
+    # pip install exa-py
+    from exa_py import Exa  # correct import per Exa SDK
+except Exception:  # ImportError or env issues
+    Exa = None  # We'll check this at runtime
 
-DEFAULT_RESULTS = 5    # default number of links to request from Exa
-RETURN_LIMIT    = 5    # cap how many items we emit to the agent
-MAX_TOTAL_SEARCHES = 3 # budget safeguard
+DEFAULT_RESULTS = 5     # default number of links to request from Exa
+RETURN_LIMIT = 5        # cap how many items we emit to the agent
+MAX_TOTAL_SEARCHES = 3  # budget safeguard
 
 
 class ExaSearchAndContentsInput(BaseModel):
@@ -29,9 +38,10 @@ class ExaSearchAndContentsInput(BaseModel):
 class ExaSearchAndContents(BaseTool):
     """
     CrewAI tool that runs Exa search and returns structured items with content.
-    Uses exa-py (client methods), not deprecated top-level calls.
+    Uses exa-py client. If the SDK or API key is missing, returns a JSON error
+    instead of raising, to avoid 500s in multi-agent flows.
     """
-    # Keep the name aligned with your crew/task prompts
+
     name: str = "exasearchandcontents"
     description: str = (
         "Search the web via Exa and retrieve page contents (full text or summary). "
@@ -41,57 +51,37 @@ class ExaSearchAndContents(BaseTool):
     # Exposed defaults (CrewAI can show them in tool schema)
     results: int = Field(default=DEFAULT_RESULTS, ge=1, le=50)
 
-    # Private budget counter
+    # Private state
+    _exa: Optional[Exa] = PrivateAttr(default=None)
     _search_calls: int = PrivateAttr(default=0)
 
     # CrewAI will validate inputs using this schema
     args_schema = ExaSearchAndContentsInput
 
-    # Lazily initialized Exa client
-    _exa: Optional[Exa] = PrivateAttr(default=None)
-
     def __init__(self, results: int = DEFAULT_RESULTS, **kwargs: Any):
         super().__init__(results=max(1, min(50, int(results))), **kwargs)
 
     # -------------------- internal helpers --------------------
-
     def _guard_budget(self) -> None:
         if self._search_calls >= MAX_TOTAL_SEARCHES:
             raise RuntimeError(f"Search budget exceeded (max {MAX_TOTAL_SEARCHES}).")
         self._search_calls += 1
-
-    def _ensure_client(self) -> Exa:
-        """
-        Create (or reuse) an Exa client. The SDK will read EXA_API_KEY from env
-        or you can pass it explicitly.
-        """
-        if self._exa is None:
-            api_key = os.getenv("EXA_API_KEY", "").strip()
-            if not api_key:
-                # Exa() also reads EXA_API_KEY from env; we just warn early.
-                raise RuntimeError("Missing EXA_API_KEY environment variable.")
-            self._exa = Exa(api_key=api_key)  # per SDK usage
-        return self._exa
 
     @staticmethod
     def _iso_date_from_recency(days: Optional[int]) -> Optional[str]:
         if not days:
             return None
         dt = datetime.utcnow() - timedelta(days=int(days))
-        return dt.date().isoformat()  # 'YYYY-MM-DD' per SDK spec
+        return dt.date().isoformat()  # 'YYYY-MM-DD'
 
     @staticmethod
     def _contents_options() -> Dict[str, Any]:
-        """
-        Contents config: text extraction with a sane cap. You can switch to summary
-        by returning {"summary": True} or mix both:
-        {"text": {"max_characters": 12000}, "summary": True}
-        """
+        # Use text extraction with a sane cap. Switch to {"summary": True} if you prefer.
         return {"text": {"max_characters": 10000}}
 
     @staticmethod
     def _pack_result(r) -> Dict[str, Any]:
-        # Exa SDK result fields: title, url, published_date, text/summary/highlights depending on 'contents'
+        # Exa SDK result fields: title, url, published_date, text/summary/highlights
         title = getattr(r, "title", "") or ""
         url = getattr(r, "url", "") or ""
         published = getattr(r, "published_date", None)
@@ -99,13 +89,11 @@ class ExaSearchAndContents(BaseTool):
         summary = getattr(r, "summary", "") or ""
         highlights = getattr(r, "highlights", None)
 
-        # Prefer text, then summary, then highlights (joined)
         if text:
             content = text
         elif summary:
             content = summary
         elif highlights:
-            # highlights may be list[str] or structured; stringify defensively
             content = "\n".join(highlights) if isinstance(highlights, list) else str(highlights)
         else:
             content = ""
@@ -114,11 +102,24 @@ class ExaSearchAndContents(BaseTool):
             "title": title,
             "url": url,
             "published_date": published,
-            "content": content[:10000],  # keep things compact for the agent
+            "content": content[:10000],  # keep compact for the agent
         }
 
-    # -------------------- CrewAI sync execution path --------------------
+    def _ensure_client(self) -> Exa:
+        # Defer heavy/optional checks until actually used
+        if Exa is None:
+            raise RuntimeError(
+                "exa-py is not installed. Install with `pip install exa-py` "
+                "and ensure it is included in your runtime/requirements."
+            )
+        if self._exa is None:
+            api_key = os.getenv("EXA_API_KEY", "").strip()
+            if not api_key:
+                raise RuntimeError("Missing EXA_API_KEY environment variable.")
+            self._exa = Exa(api_key=api_key)
+        return self._exa
 
+    # -------------------- CrewAI sync execution path --------------------
     def _run(
         self,
         query: str,
@@ -129,10 +130,12 @@ class ExaSearchAndContents(BaseTool):
         **kwargs: Any,
     ) -> str:
         """
-        Execute search and return a JSON string with {"items": [...]}.
+        Execute search and return a JSON string: {"items": [...]} or {"error": "..."}.
         """
-        self._guard_budget()
-        exa = self._ensure_client()
+        try:
+            self._guard_budget()
+        except Exception as e:
+            return json.dumps({"error": f"budget-guard: {e}"})
 
         if not query or not isinstance(query, str):
             return json.dumps({"items": [], "note": "empty or invalid 'query'"})
@@ -141,11 +144,10 @@ class ExaSearchAndContents(BaseTool):
         num_results = max(1, min(50, int(results if results is not None else self.results)))
         start_published_date = self._iso_date_from_recency(recency_days)
 
-        # Build search kwargs per Exa SDK
+        # Build search kwargs for Exa
         search_kwargs: Dict[str, Any] = {
             "num_results": int(num_results),
-            # contents included by default, but we pass explicit options for clarity
-            "contents": self._contents_options(),  # returns text unless you change it
+            "contents": self._contents_options(),  # include text by default
         }
         if included_domains:
             search_kwargs["include_domains"] = included_domains
@@ -155,21 +157,18 @@ class ExaSearchAndContents(BaseTool):
             search_kwargs["start_published_date"] = start_published_date
 
         try:
-            # Correct call per SDK: exa.search(...) returns results with contents
-            # Docs: https://exa.ai/docs/sdks/python-sdk ; Spec: https://exa.ai/docs/sdks/python-sdk-specification
+            exa = self._ensure_client()
             response = exa.search(query, **search_kwargs)
+            items: List[Dict[str, Any]] = []
+            for r in getattr(response, "results", [])[:RETURN_LIMIT]:
+                items.append(self._pack_result(r))
+            return json.dumps({"items": items})
         except Exception as e:
-            return json.dumps({"items": [], "note": f"exa.search failed: {e}"})
+            # Surface a structured error string rather than raising
+            return json.dumps({"error": f"exa.search failed: {type(e).__name__}: {e}"})
 
-        # Compact items for the agent
-        items: List[Dict[str, Any]] = []
-        for r in getattr(response, "results", [])[:RETURN_LIMIT]:
-            items.append(self._pack_result(r))
-
-        return json.dumps({"items": items})
-
+    # -------------------- CrewAI async path --------------------
     async def _arun(self, **kwargs: Any) -> str:
-        # CrewAI synchronous path is typically used, but this keeps API parity.
+        # Call the sync path for simplicity; adapt to an async SDK if available
         return self._run(**kwargs)
- 
     
