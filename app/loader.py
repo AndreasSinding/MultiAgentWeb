@@ -1,39 +1,90 @@
 # app/loader.py
 import os
 import glob
-from typing import Dict, Any, Optional
 import yaml
-from dotenv import load_dotenv
+import importlib
+from typing import Dict, Any, Optional, Callable
 
-# Only your custom Exa tool
-from app.exa_tool import ExaSearchAndContents
+# CrewAI core
+from crewai import Agent, Task, Crew, Process
 
-# Pydantic schemas
-from app.models import ResearchOutput, AnalysisOutput
+# Your model/types
+from app.models import LLM  # and optionally SCHEMA_REGISTRY if you have it
 
-load_dotenv()
+# Optional: output schemas registry
+try:
+    from app.models import SCHEMA_REGISTRY  # dict[str, pydantic.BaseModel subclass]
+except Exception:
+    SCHEMA_REGISTRY = {}
 
-from crewai import Agent, Task, Crew, LLM, Process
+# Tools are optional; import defensively
+try:
+    from crewai_tools import TavilySearchTool, SerperDevTool
+except Exception:
+    TavilySearchTool = None
+    SerperDevTool = None
 
-# Map YAML schema names -> actual Pydantic classes
-SCHEMA_REGISTRY = {
-    "ResearchOutput": ResearchOutput,
-    "AnalysisOutput": AnalysisOutput,
-}
-
-# Map YAML tool 'type' -> constructor
-TOOL_REGISTRY = {
-    "ExaSearchAndContents": lambda cfg: ExaSearchAndContents(**(cfg or {})),
-    "exa_search_and_contents": lambda cfg: ExaSearchAndContents(**(cfg or {})),
-}
 
 def _read_yaml(path: str) -> Dict[str, Any]:
     with open(path, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f) or {}
+        data = yaml.safe_load(f) or {}
+    return data
+
+
+# --------------------------------------------------------------------
+# Tool registry + dynamic resolver
+# --------------------------------------------------------------------
+TOOL_REGISTRY: Dict[str, Callable[[Dict[str, Any]], Any]] = {}
+if TavilySearchTool is not None:
+    TOOL_REGISTRY["TavilySearchTool"] = lambda cfg: TavilySearchTool(**(cfg or {}))
+if SerperDevTool is not None:
+    TOOL_REGISTRY["SerperDevTool"] = lambda cfg: SerperDevTool(**(cfg or {}))
+
+def _resolve_tool_constructor(ttype: str) -> Callable[[Dict[str, Any]], Any]:
+    """
+    - If ttype is a known alias (e.g., 'TavilySearchTool'), return that constructor.
+    - If ttype looks like 'module:Class' or 'module.Class', import and return Class.
+    - Else: error with helpful message.
+    """
+    # First: alias mapping
+    ctor = TOOL_REGISTRY.get(ttype)
+    if ctor is not None:
+        return ctor
+
+    # Dynamic import path: "module:Class" or "module.Class"
+    module_name, cls_name = None, None
+    if ":" in ttype:
+        module_name, cls_name = ttype.split(":", 1)
+    elif "." in ttype:
+        parts = ttype.split(".")
+        module_name, cls_name = ".".join(parts[:-1]), parts[-1]
+
+    if not module_name or not cls_name:
+        raise ValueError(
+            f"Unsupported or unavailable tool type '{ttype}'. "
+            f"Use a known alias ({', '.join(TOOL_REGISTRY.keys())}) or 'module:Class'."
+        )
+
+    try:
+        mod = importlib.import_module(module_name)
+    except Exception as e:
+        raise ImportError(f"Could not import module '{module_name}' for tool '{ttype}': {e}") from e
+
+    try:
+        klass = getattr(mod, cls_name)
+    except AttributeError as e:
+        raise ImportError(f"Module '{module_name}' does not define '{cls_name}' for tool '{ttype}'.") from e
+
+    # Return a constructor that applies config as kwargs
+    return lambda cfg: klass(**(cfg or {}))
+
 
 def load_llm(llm_yaml_path: str) -> LLM:
     data = _read_yaml(llm_yaml_path).get("llm", {})
-    api_key = os.getenv("GROQ_API_KEY")  # from .env
+    api_key = os.getenv("GROQ_API_KEY")  # from .env or environment
+    if not api_key and data.get("api_key"):
+        # allow YAML override if you want (optional)
+        api_key = data["api_key"]
     return LLM(
         provider=data.get("provider", "groq"),
         model=data.get("model", "llama-3.3-70b-versatile"),
@@ -42,56 +93,31 @@ def load_llm(llm_yaml_path: str) -> LLM:
         temperature=data.get("temperature", 0.2),
     )
 
+
 def load_tools(tools_dir: str) -> Dict[str, Any]:
-    """
-    tool:
-      name: exasearchandcontents   # referenced in agent YAML
-      type: ExaSearchAndContents   # looked up in TOOL_REGISTRY
-      config:
-        results: 5
-        pages: 5
-    """
     tools: Dict[str, Any] = {}
+    if not os.path.isdir(tools_dir):
+        return tools  # no tools folder -> fine
+
     for path in glob.glob(os.path.join(tools_dir, "*.yaml")):
         y = _read_yaml(path).get("tool", {})
-        name = y.get("name")
-        ttype = y.get("type")
-        if not name or not ttype:
-            raise ValueError(f"Tool YAML missing 'name' or 'type': {path}")
-        constructor = TOOL_REGISTRY.get(ttype)
-        if constructor is None:
-            raise ValueError(f"Unsupported tool type '{ttype}' in {path}")
-        if name in tools:
-            raise ValueError(f"Duplicate tool name '{name}' in {path}")
-        tools[name] = constructor(y.get("config", {}))
+        name = y["name"]
+        ttype = y["type"]
+
+        constructor = _resolve_tool_constructor(ttype)
+        try:
+            tools[name] = constructor(y.get("config", {}))
+        except Exception as e:
+            raise RuntimeError(f"Failed to construct tool '{name}' (type '{ttype}') from {path}: {e}") from e
+
     return tools
 
+
 def load_agents(agents_dir: str, llm: LLM, tools_by_name: Dict[str, Any]) -> Dict[str, Agent]:
-    """
-    agent:
-      name: Web Researcher
-      role: researcher
-      goal: "Find the best sources"
-      backstory: "Expert web sleuth"
-      verbose: true
-      allow_delegation: false
-      tools: [exasearchandcontents]
-      # memory: false  <-- you can keep this in YAML, but we do NOT pass it through here.
-    """
     agents: Dict[str, Agent] = {}
     for path in glob.glob(os.path.join(agents_dir, "*.yaml")):
         y = _read_yaml(path).get("agent", {})
-
-        tool_names = y.get("tools", []) or []
-        missing = [t for t in tool_names if t not in tools_by_name]
-        if missing:
-            raise ValueError(
-                f"Unknown tool(s) {missing} referenced by agent YAML {path}. "
-                f"Available: {list(tools_by_name.keys())}"
-            )
-
-        tool_objs = [tools_by_name[t] for t in tool_names]
-
+        tool_objs = [tools_by_name[t] for t in y.get("tools", []) if t in tools_by_name]
         agent = Agent(
             name=y["name"],
             role=y["role"],
@@ -99,15 +125,13 @@ def load_agents(agents_dir: str, llm: LLM, tools_by_name: Dict[str, Any]) -> Dic
             backstory=y.get("backstory", ""),
             verbose=y.get("verbose", False),
             allow_delegation=y.get("allow_delegation", False),
-            tools=tool_objs,    # BaseTool instances
+            tools=tool_objs,
             llm=llm,
-            # Intentionally not passing 'memory' to avoid backend activation
         )
-
-        # Use .role as key (CrewAI 1.8.x expectation in some flows)
+        # CrewAI 1.8.x prefers .role as the key used in tasks
         agents[agent.role] = agent
-
     return agents
+
 
 def _schema_from_name(name: Optional[str]):
     if not name:
@@ -117,28 +141,14 @@ def _schema_from_name(name: Optional[str]):
         raise ValueError(f"Unknown output_schema '{name}'. Add it to SCHEMA_REGISTRY.")
     return schema
 
+
 def load_tasks(tasks_dir: str, agents_by_name: Dict[str, Agent]) -> Dict[str, Task]:
-    """
-    task:
-      name: Do research
-      agent: researcher
-      description: "Search and summarize"
-      expected_output: "Bulleted list"
-      output_schema: ResearchOutput
-    """
     tasks: Dict[str, Task] = {}
     for path in glob.glob(os.path.join(tasks_dir, "*.yaml")):
         y = _read_yaml(path).get("task", {})
-
-        agent_name = y["agent"]
-        if agent_name not in agents_by_name:
-            raise ValueError(
-                f"Task YAML {path} references unknown agent '{agent_name}'. "
-                f"Available agents: {list(agents_by_name.keys())}"
-            )
+        agent_name = y["agent"]  # should match Agent.role
         agent = agents_by_name[agent_name]
         schema = _schema_from_name(y.get("output_schema"))
-
         task = Task(
             name=y.get("name"),
             description=y["description"],
@@ -149,32 +159,22 @@ def load_tasks(tasks_dir: str, agents_by_name: Dict[str, Agent]) -> Dict[str, Ta
         tasks[y["name"]] = task
     return tasks
 
+
 def load_crew(
     crew_yaml_path: str,
     agents_by_name: Dict[str, Agent],
     tasks_by_name: Dict[str, Task],
 ) -> Crew:
-    """
-    crew:
-      name: MarketAlt
-      agents: [researcher, analyst]
-      order: ["Do research", "Write analysis"]
-      process: sequential  # or parallel
-    """
     y = _read_yaml(crew_yaml_path).get("crew", {})
     order = y["order"]
     task_list = [tasks_by_name[name] for name in order]
-
     process = y.get("process", "sequential").lower()
     process_enum = Process.sequential if process == "sequential" else Process.parallel
-
     agent_list = [agents_by_name[a] for a in y.get("agents", agents_by_name.keys())]
-
-    # Return a Crew object (no trailing comma)
     return Crew(
         name=y.get("name"),
         agents=agent_list,
         tasks=task_list,
         process=process_enum,
         verbose=True,
-    )
+    ))
