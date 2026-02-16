@@ -1,7 +1,6 @@
-
+# tools/exa.yaml
 tool:
   name: exasearchandcontents
-  type: ExaSearchAndContents
+  type: app.exa_tool:ExaSearchAndContents   # <— dynamic import path
   config:
     results: 5
-    #pages: 5
