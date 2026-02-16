@@ -27,7 +27,7 @@ from typing import Any, Dict, List, Tuple
 from pptx import Presentation
 from pptx.util import Inches, Pt
 from pptx.enum.text import PP_ALIGN
-
+from __future__ import annotations
 
 # --------------------------------------------------------------------
 # Basic utils (safe for import time)
@@ -146,7 +146,6 @@ def _safe_filename(base: str) -> str:
         return "report"
     return re.sub(r"[^A-Za-z0-9._-]+", "_", base).strip("_") or "report"
 
-from __future__ import annotations
 
 # --------------------------------------------------------------------
 # JSON sanitization & safe parsing
