@@ -27,7 +27,6 @@ from typing import Any, Dict, List, Tuple
 from pptx import Presentation
 from pptx.util import Inches, Pt
 from pptx.enum.text import PP_ALIGN
-from __future__ import annotations
 
 # --------------------------------------------------------------------
 # Basic utils (safe for import time)
