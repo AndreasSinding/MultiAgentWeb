@@ -171,7 +171,7 @@ class ExaSearchAndContents(BaseTool):
     async def _arun(self, **kwargs: Any) -> str:
         # CrewAI synchronous path is typically used, but this keeps API parity.
         return self._run(**kwargs)
-    ) -> str:
+ 
         """
         Execute search and return a JSON string with {"items": [...]}.
         """
@@ -212,6 +212,4 @@ class ExaSearchAndContents(BaseTool):
 
         return json.dumps({"items": items})
 
-    async def _arun(self, **kwargs: Any) -> str:
-        # CrewAI synchronous path is typically used, but this keeps API parity.
-        return self._run(**kwargs)
+   
