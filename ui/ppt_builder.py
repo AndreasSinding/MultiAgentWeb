@@ -820,7 +820,9 @@ def create_multislide_pptx(result: Dict[str, Any], topic: str, file_path: str) -
     data, tasks_output = _dig_outputs(result)
 
     # consider many potential stringy fields
-    also_consider: List[str] = []
+    #also_consider: List[str] = []
+    also_consider = []
+  
     if isinstance(data, dict):
         # common keys
         for k in ("summary", "final_output", "raw", "content", "text"):
