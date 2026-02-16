@@ -177,4 +177,4 @@ def load_crew(
         tasks=task_list,
         process=process_enum,
         verbose=True,
-    ))
+    )
