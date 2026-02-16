@@ -165,17 +165,28 @@ SECTION_KEYS = [
 # Extract Outputs
 # --------------------------------------------------------------------
 def _dig_outputs(result: Any):
+    data = result
     if isinstance(result, dict) and isinstance(result.get("result"), dict):
         data = result["result"]
-    else:
-        data = result
 
+    # IMPORTANT: extract tasks output AND final_output content
     tasks_output = []
     if isinstance(data, dict):
-        tasks_output = data.get("tasks_output") or data.get("tasks") or []
+        tasks_output = (
+            data.get("tasks_output") 
+            or data.get("tasks") 
+            or []
+        )
 
-    return (data if isinstance(data, dict) else {}), tasks_output
+    # NEW: include the final agent answer as a pseudo-task
+    if isinstance(data, dict):
+        final_answer = data.get("final_output") or data.get("raw") or data.get("text") or data.get("content")
+        if isinstance(final_answer, str):
+            tasks_output = tasks_output + [{"content": final_answer}]
+        elif isinstance(final_answer, dict):
+            tasks_output = tasks_output + [{"result": final_answer}]
 
+    return data, tasks_output
 
 def _brace_scan_json(text: str) -> List[Any]:
     objs, depth, start = [], 0, None
