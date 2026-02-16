@@ -22,11 +22,16 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Tuple, Optional
 
 from pptx import Presentation
 from pptx.util import Inches, Pt
 from pptx.enum.text import PP_ALIGN
+
+# Compiled, re‑usable patterns (top-level constants)
+HEADER_BULLET = re.compile(r'^(?:[-*\u2022]|\d+[.)])\s+#')   # e.g. "- # Sammendrag"
+BULLET        = re.compile(r'^(?:[-*\u2022]|\d+[.)])\s+')    # e.g. "- item", "1) item"
+
 
 # --------------------------------------------------------------------
 # Basic utils (safe for import time)
@@ -94,7 +99,7 @@ def _collect_strings_deep(obj: Any, limit: int = 20_000) -> List[str]:
 
 def _drop_bullet(s: str) -> str:
     # Remove bullets like -, *, •, and ordered lists "1.", "1)"
-    return re.sub(r"^\s*(?:[-*•]|\d+[.)])\s+", "", s or "").strip()
+    return re.sub(r'^(?:[-*\u2022]|\d+[.)])\s+', '', s or '').strip()
 
 
 def _find_urls(s: str) -> List[str]:
@@ -143,47 +148,6 @@ def _safe_filename(base: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]+", "_", base).strip("_") or "report"
 
 
-# --------------------------------------------------------------------
-# JSON sanitization & safe parsing
-# --------------------------------------------------------------------
-def _preclean_near_json(s: str) -> str:
-    """
-    Clean markdown bullets, code fences, and stray formatting before JSON parsing.
-    """
-    if not isinstance(s, str):
-        return ""
-    s = s.strip()
-    # Strip ```json ... ``` or ``` ... ```
-    s = re.sub(r"```(?:json)?\s*([\s\S]*?)\s*```", r"\1", s, flags=re.I)
-    # Remove leading "-" or "*" bullets
-    lines = [re.sub(r"^\s*[-*]\s+", "", ln) for ln in s.splitlines()]
-    return "\n".join(lines).strip()
-
-
-def _safe_json_loads(s: str):
-    """
-    json.loads wrapper that never raises. Returns (obj, err).
-    """
-    try:
-        return json.loads(s), None
-    except Exception as e:
-        return None, e
-
-
-# --------------------------------------------------------------------
-# Utility helpers
-# --------------------------------------------------------------------
-def _safe_filename(base: str) -> str:
-    if not base:
-        return "report"
-    return re.sub(r"[^A-Za-z0-9._-]+", "_", base).strip("_") or "report"
-
-
-def _coerce_list(x: Any) -> List[Any]:
-    if not x:
-        return []
-    return list(x) if isinstance(x, list) else [x]
-
 
 def _style_paragraph(p, size_pt: int = 18, font: str = "Segoe UI"):
     """Safe python-pptx font styling."""
@@ -199,10 +163,6 @@ def _style_paragraph(p, size_pt: int = 18, font: str = "Segoe UI"):
         except Exception:
             pass
 
-
-# --------------------------------------------------------------------
-# Section maps (NO + EN) and result shape helpers
-# --------------------------------------------------------------------
 # --------------------------------------------------------------------
 # Section maps (NO + EN) and result shape helpers
 # --------------------------------------------------------------------
@@ -264,38 +224,6 @@ def _dig_outputs(result: Any):
     return (data if isinstance(data, dict) else {}), tasks_output
 
 
-def _collect_strings_deep(obj, limit=20000):
-    """
-    Walk any dict/list and collect string-like values that look relevant.
-    Soft cap to avoid giant payloads.
-    """
-    out = []
-
-    def walk(x):
-        if isinstance(x, str):
-            if x.strip():
-                out.append(x.strip())
-        elif isinstance(x, dict):
-            for v in x.values():
-                walk(v)
-        elif isinstance(x, list):
-            for v in x:
-                walk(v)
-
-    walk(obj)
-
-    # mild dedupe + cap
-    seen, res, total = set(), [], 0
-    for s in out:
-        if s in seen:
-            continue
-        seen.add(s)
-        res.append(s)
-        total += len(s)
-        if total > limit:
-            break
-    return res
-
 
 # --------------------------------------------------------------------
 # Extraction: JSON (safe) + Markdown (NO/EN)
@@ -336,6 +264,7 @@ def _extract_all_json_blocks(
 
     # 1) Fenced JSON blocks: parse safely
     fence = re.compile(r"```(?:json)?(.*?)```", flags=re.S | re.I)
+  
     for s in list(candidates):
         for block in fence.findall(s):
             cleaned = _preclean_near_json(block)
@@ -364,8 +293,8 @@ def _extract_all_json_blocks(
 
     # 3) Markdown extraction (NO + EN)
     for s in candidates:
-        _extract_from_markdown_no(merged, s)
-        _extract_from_markdown_en(merged, s)
+        _extract_from_markdown(merged, s)
+
 
     # 4) URLs anywhere -> sources
     for u in _find_urls("\n".join(candidates)):
@@ -441,120 +370,121 @@ def _brace_scan_json(text: str) -> List[Any]:
 # --------------------------------------------------------------------
 # Markdown extractors (NO + EN)
 # --------------------------------------------------------------------
-def _extract_from_markdown_no(merged: Dict[str, Any], s: str) -> None:
+def _extract_from_markdown(merged: Dict[str, Any], s: str) -> None:
+    """
+    Parse a markdown/text block that may be Norwegian or English and
+    merge the content into `merged` sections.
+
+    Supported sections (via SECTION_MAP_NO / SECTION_MAP_EN):
+      - summary
+      - trends, insights, opportunities, risks, sources  (simple bullet lists)
+      - competitors (table-like list items; each line -> name | position | notes)
+      - numbers     (table-like list items; each line -> metric | value | source)
+      - recommendations (prio/action/rationale or "action — why")
+
+    Rules:
+      - Headings can be "# Heading", "## Heading", or plain "Heading:" on its own line.
+      - Bulleted/numbered lines under a recognized heading become the items.
+      - For summary, the longest accumulated text wins (same as your logic).
+      - We accept both NO and EN headers at once; first match wins per line.
+    """
     lines = [ln.rstrip() for ln in (s or "").splitlines()]
-    current = None
-    buf: List[str] = []
+    if not lines:
+        return
+
+    # Accept both languages
+    def norm_header_name(h: str) -> Optional[str]:
+        """Return canonical section key or None."""
+        x = (h or "").strip().lower().rstrip(":")
+        return (
+            SECTION_MAP_NO.get(x) or
+            SECTION_MAP_EN.get(x)
+        )
+
+    current: Optional[str] = None       # canonical key in SECTION_KEYS (e.g., "trends")
+    buf: List[str] = []                 # bucket for lines under the current heading
 
     def flush():
+        """Commit buffered lines under the current heading."""
         nonlocal buf, current
         if not current or not buf:
             buf = []
             return
-        key = SECTION_MAP_NO.get(current, None)
-        if not key:
-            buf = []
-            return
 
+        key = current
+
+        # Simple string list sections
         if key in ("trends", "insights", "opportunities", "risks", "sources"):
             for it in buf:
                 val = _strip(_drop_bullet(it))
                 if val and val not in merged[key]:
                     merged[key].append(val)
+
+        # Structured sections
         elif key == "competitors":
             for it in buf:
                 name, pos, note = _split3(_drop_bullet(it))
                 merged["competitors"].append({"name": name, "position": pos, "notes": note})
+
         elif key == "numbers":
             for it in buf:
                 metric, value, source = _split3(_drop_bullet(it))
                 merged["numbers"].append({"metric": metric, "value": value, "source": source})
+
         elif key == "recommendations":
             clean = [_drop_bullet(x) for x in buf]
             prio, action, why = _split_recommendation(clean)
             for i, (p, a, w) in enumerate(zip(prio, action, why), start=1):
-                merged["recommendations"].append({"priority": p or i, "action": a, "rationale": w})
+                merged["recommendations"].append({
+                    "priority": p or i,
+                    "action": a,
+                    "rationale": w
+                })
+
         elif key == "summary":
             text = " ".join([_drop_bullet(x) for x in buf]).strip()
             if text and len(text) > len(merged["summary"]):
                 merged["summary"] = text
+
+        # reset buffer for next section
         buf = []
 
-    for ln in lines:
-        ln_clean = ln.strip()
-        # If the model produced a bullet before a header, e.g. "- # Sammendrag"
-        if re.match(r'^(-|\*|•|\d+[.)])\s+#', ln_clean):
-            ln_clean = re.sub(r'^(-|\*|•|\d+[.)])\s+', '', ln_clean)
+    # Walk all lines and segment by headers
+    for raw in lines:
+        ln = raw.strip()
+        if not ln:
+            continue
 
-        ln_lower = ln_clean.lower().rstrip(":")
-        if ln_clean.startswith("#"):
-            header = ln_clean.lstrip("# ").lower().rstrip(":")
-            if header in SECTION_MAP_NO:
-                flush(); current = header; buf = []; continue
-        if ln_lower in SECTION_MAP_NO:
-            flush(); current = ln_lower; buf = []; continue
+        # If model produced a bullet before a hash-header, e.g. "- # Heading"
+        if HEADER_BULLET.match(ln):
+            ln = BULLET.sub("", ln)
 
-        if current:
-            if re.match(r'^(-|\*|•|\d+[.)])\s+', ln_clean) or ln_clean:
-                buf.append(ln_clean)
+        # Case 1: Markdown style heading "# ...", "## ..."
+        if ln.startswith("#"):
+            header = ln.lstrip("# ").strip()
+            canon = norm_header_name(header)
+            if canon:
+                flush()
+                current = canon
+                buf = []
+                continue
 
-    flush(); flush()
-
-
-def _extract_from_markdown_en(merged: Dict[str, Any], s: str) -> None:
-    lines = [ln.rstrip() for ln in (s or "").splitlines()]
-    current = None
-    buf: List[str] = []
-
-    def flush():
-        nonlocal buf, current
-        if not current or not buf:
+        # Case 2: Plain text heading line that ends with ":" or exactly equals a known key
+        lower = ln.lower().rstrip(":")
+        canon = norm_header_name(lower)
+        if canon:
+            flush()
+            current = canon
             buf = []
-            return
-        key = SECTION_MAP_EN.get(current, None)
-        if not key:
-            buf = []
-            return
+            continue
 
-        if key in ("trends", "insights", "opportunities", "risks", "sources"):
-            for it in buf:
-                val = _strip(_drop_bullet(it))
-                if val and val not in merged[key]:
-                    merged[key].append(val)
-        elif key == "competitors":
-            for it in buf:
-                name, pos, note = _split3(_drop_bullet(it))
-                merged["competitors"].append({"name": name, "position": pos, "notes": note})
-        elif key == "numbers":
-            for it in buf:
-                metric, value, source = _split3(_drop_bullet(it))
-                merged["numbers"].append({"metric": metric, "value": value, "source": source})
-        elif key == "recommendations":
-            clean = [_drop_bullet(x) for x in buf]
-            prio, action, why = _split_recommendation(clean)
-            for i, (p, a, w) in enumerate(zip(prio, action, why), start=1):
-                merged["recommendations"].append({"priority": p or i, "action": a, "rationale": w})
-        elif key == "summary":
-            text = " ".join([_drop_bullet(x) for x in buf]).strip()
-            if text and len(text) > len(merged["summary"]):
-                merged["summary"] = text
-        buf = []
-
-    for ln in lines:
-        ln_clean = ln.strip()
-        if ln_clean.startswith("#"):
-            header = ln_clean.lstrip("# ").lower().rstrip(":")
-            if header in SECTION_MAP_EN:
-                flush(); current = header; buf = []; continue
-        if ln_clean.lower().rstrip(":") in SECTION_MAP_EN:
-            flush(); current = ln_clean.lower().rstrip(":"); buf = []; continue
-
+        # Case 3: Content line under current heading
         if current:
-            if re.match(r'^(-|\*|•|\d+[.)])\s+', ln_clean) or ln_clean:
-                buf.append(ln_clean)
+            # Any text (bulleted or not) counts as content; we’ll strip bullets in flush()
+            buf.append(ln)
 
-    flush(); flush()
-
+    # Commit last block
+    flush()
 
 
 # --------------------------------------------------------------------
