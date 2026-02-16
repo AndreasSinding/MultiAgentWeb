@@ -171,3 +171,47 @@ class ExaSearchAndContents(BaseTool):
     async def _arun(self, **kwargs: Any) -> str:
         # CrewAI synchronous path is typically used, but this keeps API parity.
         return self._run(**kwargs)
+    ) -> str:
+        """
+        Execute search and return a JSON string with {"items": [...]}.
+        """
+        self._guard_budget()
+        exa = self._ensure_client()
+
+        if not query or not isinstance(query, str):
+            return json.dumps({"items": [], "note": "empty or invalid 'query'"})
+
+        # Effective knobs
+        num_results = max(1, min(50, int(results if results is not None else self.results)))
+        start_published_date = self._iso_date_from_recency(recency_days)
+
+        # Build search kwargs per Exa SDK
+        search_kwargs: Dict[str, Any] = {
+            "num_results": int(num_results),
+            # contents included by default, but we pass explicit options for clarity
+            "contents": self._contents_options(),  # returns text unless you change it
+        }
+        if included_domains:
+            search_kwargs["include_domains"] = included_domains
+        if excluded_domains:
+            search_kwargs["exclude_domains"] = excluded_domains
+        if start_published_date:
+            search_kwargs["start_published_date"] = start_published_date
+
+        try:
+            # Correct call per SDK: exa.search(...) returns results with contents
+            # Docs: https://exa.ai/docs/sdks/python-sdk ; Spec: https://exa.ai/docs/sdks/python-sdk-specification
+            response = exa.search(query, **search_kwargs)
+        except Exception as e:
+            return json.dumps({"items": [], "note": f"exa.search failed: {e}"})
+
+        # Compact items for the agent
+        items: List[Dict[str, Any]] = []
+        for r in getattr(response, "results", [])[:RETURN_LIMIT]:
+            items.append(self._pack_result(r))
+
+        return json.dumps({"items": items})
+
+    async def _arun(self, **kwargs: Any) -> str:
+        # CrewAI synchronous path is typically used, but this keeps API parity.
+        return self._run(**kwargs)
