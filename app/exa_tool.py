@@ -6,24 +6,24 @@ import json
 from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any
 
-# --- CrewAI BaseTool: support both layouts (older/newer releases) ---
+# CrewAI BaseTool: try new layout first, then fallback
 try:
-    from crewai.tools import BaseTool  # e.g., CrewAI 1.8.x+
+    from crewai.tools import BaseTool   # CrewAI 1.8.x+
 except Exception:
-    from crewai_tools import BaseTool  # fallback for older setups
+    from crewai_tools import BaseTool   # older setups
 
 from pydantic import BaseModel, Field, PrivateAttr
 
-# --- Optional Exa SDK import (guarded) ---
+# Optional Exa SDK import (guarded)
 try:
     # pip install exa-py
-    from exa_py import Exa  # correct import per Exa SDK
-except Exception:  # ImportError or env issues
-    Exa = None  # We'll check this at runtime
+    from exa_py import Exa
+except Exception:
+    Exa = None  # defer error until actually used
 
-DEFAULT_RESULTS = 5     # default number of links to request from Exa
-RETURN_LIMIT = 5        # cap how many items we emit to the agent
-MAX_TOTAL_SEARCHES = 3  # budget safeguard
+DEFAULT_RESULTS = 5
+RETURN_LIMIT = 5
+MAX_TOTAL_SEARCHES = 3
 
 
 class ExaSearchAndContentsInput(BaseModel):
@@ -38,8 +38,7 @@ class ExaSearchAndContentsInput(BaseModel):
 class ExaSearchAndContents(BaseTool):
     """
     CrewAI tool that runs Exa search and returns structured items with content.
-    Uses exa-py client. If the SDK or API key is missing, returns a JSON error
-    instead of raising, to avoid 500s in multi-agent flows.
+    If the SDK or API key is missing, returns a JSON error instead of raising.
     """
 
     name: str = "exasearchandcontents"
@@ -48,20 +47,16 @@ class ExaSearchAndContents(BaseTool):
         "Returns a compact JSON array of items with title, url, published_date, and content."
     )
 
-    # Exposed defaults (CrewAI can show them in tool schema)
+    args_schema = ExaSearchAndContentsInput
     results: int = Field(default=DEFAULT_RESULTS, ge=1, le=50)
 
-    # Private state
-    _exa: Optional[Exa] = PrivateAttr(default=None)
+    _exa: Optional["Exa"] = PrivateAttr(default=None)
     _search_calls: int = PrivateAttr(default=0)
-
-    # CrewAI will validate inputs using this schema
-    args_schema = ExaSearchAndContentsInput
 
     def __init__(self, results: int = DEFAULT_RESULTS, **kwargs: Any):
         super().__init__(results=max(1, min(50, int(results))), **kwargs)
 
-    # -------------------- internal helpers --------------------
+    # -------- helpers --------
     def _guard_budget(self) -> None:
         if self._search_calls >= MAX_TOTAL_SEARCHES:
             raise RuntimeError(f"Search budget exceeded (max {MAX_TOTAL_SEARCHES}).")
@@ -72,16 +67,14 @@ class ExaSearchAndContents(BaseTool):
         if not days:
             return None
         dt = datetime.utcnow() - timedelta(days=int(days))
-        return dt.date().isoformat()  # 'YYYY-MM-DD'
+        return dt.date().isoformat()
 
     @staticmethod
     def _contents_options() -> Dict[str, Any]:
-        # Use text extraction with a sane cap. Switch to {"summary": True} if you prefer.
-        return {"text": {"max_characters": 10000}}
+        return {"text": {"max_characters": 10000}}  # swap to {"summary": True} if preferred
 
     @staticmethod
     def _pack_result(r) -> Dict[str, Any]:
-        # Exa SDK result fields: title, url, published_date, text/summary/highlights
         title = getattr(r, "title", "") or ""
         url = getattr(r, "url", "") or ""
         published = getattr(r, "published_date", None)
@@ -102,15 +95,14 @@ class ExaSearchAndContents(BaseTool):
             "title": title,
             "url": url,
             "published_date": published,
-            "content": content[:10000],  # keep compact for the agent
+            "content": content[:10000],
         }
 
-    def _ensure_client(self) -> Exa:
-        # Defer heavy/optional checks until actually used
+    def _ensure_client(self):
         if Exa is None:
             raise RuntimeError(
                 "exa-py is not installed. Install with `pip install exa-py` "
-                "and ensure it is included in your runtime/requirements."
+                "and ensure it is included in your deployment."
             )
         if self._exa is None:
             api_key = os.getenv("EXA_API_KEY", "").strip()
@@ -119,7 +111,7 @@ class ExaSearchAndContents(BaseTool):
             self._exa = Exa(api_key=api_key)
         return self._exa
 
-    # -------------------- CrewAI sync execution path --------------------
+    # -------- CrewAI sync entry --------
     def _run(
         self,
         query: str,
@@ -129,9 +121,6 @@ class ExaSearchAndContents(BaseTool):
         recency_days: Optional[int] = None,
         **kwargs: Any,
     ) -> str:
-        """
-        Execute search and return a JSON string: {"items": [...]} or {"error": "..."}.
-        """
         try:
             self._guard_budget()
         except Exception as e:
@@ -140,14 +129,12 @@ class ExaSearchAndContents(BaseTool):
         if not query or not isinstance(query, str):
             return json.dumps({"items": [], "note": "empty or invalid 'query'"})
 
-        # Effective knobs
         num_results = max(1, min(50, int(results if results is not None else self.results)))
         start_published_date = self._iso_date_from_recency(recency_days)
 
-        # Build search kwargs for Exa
         search_kwargs: Dict[str, Any] = {
             "num_results": int(num_results),
-            "contents": self._contents_options(),  # include text by default
+            "contents": self._contents_options(),
         }
         if included_domains:
             search_kwargs["include_domains"] = included_domains
@@ -164,11 +151,8 @@ class ExaSearchAndContents(BaseTool):
                 items.append(self._pack_result(r))
             return json.dumps({"items": items})
         except Exception as e:
-            # Surface a structured error string rather than raising
             return json.dumps({"error": f"exa.search failed: {type(e).__name__}: {e}"})
 
-    # -------------------- CrewAI async path --------------------
+    # -------- async path (delegates to sync) --------
     async def _arun(self, **kwargs: Any) -> str:
-        # Call the sync path for simplicity; adapt to an async SDK if available
         return self._run(**kwargs)
-    
