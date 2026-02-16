@@ -4,4 +4,4 @@ tool:
   type: ExaSearchAndContents
   config:
     results: 5
-    pages: 5
+    #pages: 5
