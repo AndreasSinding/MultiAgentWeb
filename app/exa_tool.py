@@ -106,6 +106,9 @@ class ExaSearchAndContents(BaseTool):
             )
         if self._exa is None:
             api_key = os.getenv("EXA_API_KEY", "").strip()
+            raw = os.getenv("EXA_API_KEY")
+            print("DEBUG exa_tool: EXA_API_KEY =", repr(raw))
+            api_key = (raw or "").strip()
             if not api_key:
                 raise RuntimeError("Missing EXA_API_KEY environment variable.")
             self._exa = Exa(api_key=api_key)
