@@ -470,59 +470,81 @@ def _add_table_slide(prs, title, headers, rows):
 # Top-level API
 # --------------------------------------------------------------------
 def create_multislide_pptx(result: Dict[str, Any], topic: str, file_path: str) -> str:
-    data, tasks_output = _dig_outputs(result)
+    """
+    Build a multi-slide PPTX presentation safely.
+    If any error occurs, return a JSON dict instead of raising,
+    so the API handler will never return an empty 0-byte Bad Gateway result.
+    """
+    try:
+        # -----------------------------
+        # Extract data from result
+        # -----------------------------
 
-    also_consider = []
-    if isinstance(data, dict):
-        for k in ("summary", "final_output", "raw", "content", "text"):
-            v = data.get(k)
-            if isinstance(v, str) and v.strip():
-                also_consider.append(v)
-        also_consider.extend(_collect_strings_deep(data)[:20])
+    
+        data, tasks_output = _dig_outputs(result)
+    
+        also_consider = []
+        if isinstance(data, dict):
+            for k in ("summary", "final_output", "raw", "content", "text"):
+                v = data.get(k)
+                if isinstance(v, str) and v.strip():
+                    also_consider.append(v)
+            also_consider.extend(_collect_strings_deep(data)[:20])
+    
+        sections = _extract_all_json_blocks(tasks_output, also_consider)
+    
+        if not sections["summary"]:
+            sections["summary"] = _strip(data.get("summary")) or "No summary available."
+    
+        prs = Presentation()
+    
+        # Title
+        slide = prs.slides.add_slide(prs.slide_layouts[0])
+        slide.shapes.title.text = "Multi‑Agent Insights Report"
+        # be defensive: some templates may not have subtitle placeholder
+        if len(slide.placeholders) > 1:
+            slide.placeholders[1].text = topic
+    
+        # Executive Summary
+        slide = prs.slides.add_slide(prs.slide_layouts[1])
+        slide.shapes.title.text = "Executive Summary"
+        tf = slide.placeholders[1].text_frame
+        tf.clear()
+        tf.paragraphs[0].text = sections["summary"]
+    
+        # Other slides
+        _add_bullet_slide(prs, "Key Trends", sections["trends"])
+        _add_bullet_slide(prs, "Market Insights", sections["insights"])
+        _add_bullet_slide(prs, "Opportunities", sections["opportunities"])
+        _add_bullet_slide(prs, "Risks", sections["risks"])
+    
+        comp_rows = [[_strip(c.get("name")), _strip(c.get("position")), _strip(c.get("notes"))]
+                     for c in sections["competitors"]]
+        _add_table_slide(prs, "Competitors / Actors", ["Name", "Position", "Notes"], comp_rows)
+    
+        num_rows = [[_strip(n.get("metric")), _strip(n.get("value")), _strip(n.get("source"))]
+                    for n in sections["numbers"]]
+        _add_table_slide(prs, "Key Numbers", ["Metric", "Value", "Source"], num_rows)
+    
+        rec_lines = []
+        for r in sections["recommendations"]:
+            pr = r.get("priority")
+            prefix = f"{pr}) " if isinstance(pr, int) else ""
+            rec_lines.append(f"{prefix}{_strip(r.get('action'))} — Why: {_strip(r.get('rationale'))}")
+        _add_bullet_slide(prs, "Recommendations", rec_lines)
+    
+        _add_bullet_slide(prs, "Sources", sections["sources"], size=16)
+        # -----------------------------
+        # Save PPT
+        # -----------------------------
+        try:
+            prs.save(file_path)
 
-    sections = _extract_all_json_blocks(tasks_output, also_consider)
+        except Exception as e:
+            print("ERROR: Failed to save PPT file:", repr(e))
+            return {
+                "error": "ppt_build_failed",
+                "details": f"Could not save pptx: {type(e).__name__}: {e}"
+            }
 
-    if not sections["summary"]:
-        sections["summary"] = _strip(data.get("summary")) or "No summary available."
-
-    prs = Presentation()
-
-    # Title
-    slide = prs.slides.add_slide(prs.slide_layouts[0])
-    slide.shapes.title.text = "Multi‑Agent Insights Report"
-    # be defensive: some templates may not have subtitle placeholder
-    if len(slide.placeholders) > 1:
-        slide.placeholders[1].text = topic
-
-    # Executive Summary
-    slide = prs.slides.add_slide(prs.slide_layouts[1])
-    slide.shapes.title.text = "Executive Summary"
-    tf = slide.placeholders[1].text_frame
-    tf.clear()
-    tf.paragraphs[0].text = sections["summary"]
-
-    # Other slides
-    _add_bullet_slide(prs, "Key Trends", sections["trends"])
-    _add_bullet_slide(prs, "Market Insights", sections["insights"])
-    _add_bullet_slide(prs, "Opportunities", sections["opportunities"])
-    _add_bullet_slide(prs, "Risks", sections["risks"])
-
-    comp_rows = [[_strip(c.get("name")), _strip(c.get("position")), _strip(c.get("notes"))]
-                 for c in sections["competitors"]]
-    _add_table_slide(prs, "Competitors / Actors", ["Name", "Position", "Notes"], comp_rows)
-
-    num_rows = [[_strip(n.get("metric")), _strip(n.get("value")), _strip(n.get("source"))]
-                for n in sections["numbers"]]
-    _add_table_slide(prs, "Key Numbers", ["Metric", "Value", "Source"], num_rows)
-
-    rec_lines = []
-    for r in sections["recommendations"]:
-        pr = r.get("priority")
-        prefix = f"{pr}) " if isinstance(pr, int) else ""
-        rec_lines.append(f"{prefix}{_strip(r.get('action'))} — Why: {_strip(r.get('rationale'))}")
-    _add_bullet_slide(prs, "Recommendations", rec_lines)
-
-    _add_bullet_slide(prs, "Sources", sections["sources"], size=16)
-
-    prs.save(file_path)
     return file_path
