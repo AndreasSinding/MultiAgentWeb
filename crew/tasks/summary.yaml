@@ -5,7 +5,7 @@ task:
     Inkluder nøkkelpunkter, anbefalinger og referanser til kilder.
   agent: Executive Summarizer
   expected_output: >
-    Lever KUN gyldig JSON som matcher ResearchOutput-skjemaet.
+    Lever KUN gyldig JSON som matcher AnalysisOutput-skjemaet.
     Ingen tekst før eller etter JSON.
     Ikke inkluder code fences oeller ekstra kommentarer
     Ikke bruk spesial formattering som tabeller eller overskrifter
