@@ -51,6 +51,11 @@ class AnalysisOutput(BaseModel):
     risks: List[str]
     recommendations: List[Recommendation]
 
+class SummaryOutput(BaseModel):
+    summary: str = Field(..., description="Short executive summary (max 400 words).")
+    key_points: List[str] = Field(default_factory=list)
+    recommendations: List[str] = Field(default_factory=list)
+    sources: List[str] = Field(default_factory=list)
 
 # -------------------------------
 # Minimal LLM wrapper (kept same API)
@@ -90,7 +95,9 @@ print("LOADING app.models.py...")
 # -------------------------------
 # Registry for loader._schema_from_name()
 # -------------------------------
+
 SCHEMA_REGISTRY = {
     "ResearchOutput": ResearchOutput,
-    "AnalysisOutput": AnalysisOutput,  # keep available; some tasks referenced it earlier
+    "AnalysisOutput": AnalysisOutput,
+    "SummaryOutput": SummaryOutput      # ← add this line
 }
