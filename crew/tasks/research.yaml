@@ -16,3 +16,6 @@ task:
   expected_output: >
     Lever KUN gyldig JSON som matcher ResearchOutput-skjemaet.
     Ingen tekst før eller etter JSON.
+    Ikke inkludere lange sitater eller full tekst
+    Lag komprimerte oppsmmeringer, ikke koip av original tekst
+    Teksten skal være < 150 ord per tema
