@@ -4,8 +4,17 @@ task:
     Lag en 1-siders lederoppsummering basert på research og analyse for {topic}.
     Inkluder nøkkelpunkter, anbefalinger og referanser til kilder.
   agent: Executive Summarizer
+
+  output_schema: SummaryOutput
+
   expected_output: >
     Lever KUN gyldig JSON som matcher SummaryOutput-skjemaet.
+    {
+      "summary": "...",
+      "key_points": ["...", "..."],
+      "recommendations": ["...", "..."],
+      "sources": ["...", "..."]
+    }
     Ingen tekst før eller etter JSON.
     Ikke inkluder code fences oeller ekstra kommentarer
     Ikke bruk spesial formattering som tabeller eller overskrifter
