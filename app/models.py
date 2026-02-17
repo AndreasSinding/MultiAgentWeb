@@ -1,5 +1,3 @@
-print("LOADING app.models.py...")
-
 # app/models.py
 from __future__ import annotations
 
@@ -88,7 +86,7 @@ class LLM(BaseModel):
         resp.raise_for_status()
         return resp.json()["choices"][0]["message"]["content"]
 
-
+print("LOADING app.models.py...")
 # -------------------------------
 # Registry for loader._schema_from_name()
 # -------------------------------
