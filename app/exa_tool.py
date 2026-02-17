@@ -95,7 +95,7 @@ class ExaSearchAndContents(BaseTool):
             "title": title,
             "url": url,
             "published_date": published,
-            "content": content[:10000],
+            "content": content[:2000],
         }
 
     def _ensure_client(self):
