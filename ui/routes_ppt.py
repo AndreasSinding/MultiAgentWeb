@@ -77,8 +77,8 @@ def _build_ppt_to_bytes(topic: str, result: Dict[str, Any], desired_name: Option
     description="Loads /runs/latest_output.json and generates a PPTX without requiring a POST body."
 )
 async def ppt_from_latest():
-    base = os.path.dirname(os.path.dirname(__file__))
-    latest_path = os.path.join(base, "runs/latest_output.json")
+    import os, json
+    latest_path = os.path.join(os.path.dirname(__file__), "runs/latest_output.json")  # <-- fixed
 
     if not os.path.exists(latest_path):
         raise HTTPException(status_code=404, detail="No latest_output.json found")
@@ -86,13 +86,12 @@ async def ppt_from_latest():
     with open(latest_path, "r", encoding="utf-8") as f:
         data = json.load(f)
 
-    topic = data.get("topic", "Untitled Report")
+    topic  = data.get("topic", "Untitled Report")
     result = data.get("result", {})
 
-    blob = await run_in_threadpool(_build_ppt_to_bytes, topic, result, topic)
+    blob: bytes = await run_in_threadpool(_build_ppt_to_bytes, topic, result, topic)
 
     download_name = _safe_filename(topic) + ".pptx"
-
     return StreamingResponse(
         io.BytesIO(blob),
         media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
@@ -101,7 +100,6 @@ async def ppt_from_latest():
             "Cache-Control": "no-store",
         },
     )
-
 
 # ----------------------------- Hidden Routes -----------------------------
 
