@@ -141,6 +141,10 @@ def run_crew_pipeline(topic: str) -> Dict[str, Any]:
     # 1) Run crew and normalize output safely
     # -------------------------------------------------
     raw_output = crew.kickoff({"topic": topic})
+    
+    print("DEBUG CREW OUTPUT DIR:", dir(raw_output))
+    print("DEBUG CREW OUTPUT:", raw_output)
+    print("DEBUG CREW OUTPUT __dict__:", getattr(raw_output, "__dict__", None))
 
     result = normalize_crew_output(raw_output)
 
