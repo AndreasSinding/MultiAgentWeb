@@ -412,11 +412,37 @@ def _merge_json_into(merged: Dict[str, Any], obj: Dict[str, Any]) -> None:
         if len(s) > len(merged["summary"]):
             merged["summary"] = s
 
-    for key in ("trends", "insights", "opportunities", "risks", "sources"):
+    # ✅ CUSTOM handling for trends (avoid stringifying dicts)
+    tr = obj.get("trends")
+    if isinstance(tr, list):
+        for t in tr:
+            if isinstance(t, dict):
+                title = _strip(t.get("title") or t.get("name"))
+                why   = _strip(t.get("why_it_matters") or t.get("detail") or t.get("summary"))
+                ev    = _strip(t.get("evidence"))
+                line  = f"{title} — {why}".strip(" —")
+                if ev:
+                    line += f" (evidence: {ev})"
+                if line:
+                    merged["trends"].append(line)
+            elif isinstance(t, str):
+                # keep only human-written strings, not dict literals
+                if not _looks_like_json_dict(t):
+                    merged["trends"].append(_strip(t))
+
+    # ✅ keep generic merge ONLY for the simple list sections
+    for key in ("insights", "opportunities", "risks", "sources"):
         for item in _coerce_list(obj.get(key)):
             s = _strip(item)
             if s:
                 merged[key].append(s)
+
+    #Remove old trends
+    #for key in ("trends", "insights", "opportunities", "risks", "sources"):
+    #    for item in _coerce_list(obj.get(key)):
+    #        s = _strip(item)
+    #        if s:
+    #            merged[key].append(s)
 
     # Map key_points (and synonyms) to insights + trends
     for k in ("key_points", "keypoints", "highlights"):
