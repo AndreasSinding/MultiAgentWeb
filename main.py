@@ -135,27 +135,30 @@ def root():
 @app.post("/run")
 def run(req: RunRequest):
     """
-    Executes the multi-agent pipeline on the given topic.
+    Executes the multi-agent pipeline on the given topic and returns a unified
+    structure the PPT builder can consume directly: { topic, result }.
     """
     try:
-        output = run_crew_pipeline(req.topic)
+        # Run crew pipeline for this topic
+        output: Dict[str, Any] = run_crew_pipeline(req.topic)
 
-        # unified structure for PPT pipeline + latest endpoint
+        # Unified structure for PPT builder + latest endpoint
         packaged = {
             "topic": req.topic,
-            "result": output   # full crew output dict
+            "result": output  # full crew output dict (final summarizer shape)
+        }
 
-        # Also persist output here (pipeline already does it)
+        # Persist unified structure (so /latest returns the same contract)
         try:
             runs_dir = os.path.join(BASE, "runs")
             os.makedirs(runs_dir, exist_ok=True)
             outfile = os.path.join(runs_dir, "latest_output.json")
             tmpfile = outfile + ".tmp"
             with open(tmpfile, "w", encoding="utf-8") as f:
-                json.dump(output, f, ensure_ascii=False, indent=2)
+                json.dump(packaged, f, ensure_ascii=False, indent=2)
             os.replace(tmpfile, outfile)
         except Exception as _e:
-            print("WARNING: Could not persist latest_output.json from /run:", _e)
+            print("WARNING: Could not persist latest_output.json:", _e)
 
         return packaged
 
