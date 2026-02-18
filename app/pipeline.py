@@ -90,51 +90,72 @@ def ensure_keys():
 # ---------------------------------------------------------------------
 def run_crew_pipeline(topic: str) -> Dict[str, Any]:
     ensure_keys()
-
     state = build_llm_and_crew_once()
+
     if not state["ready"] or state.get("crew") is None:
         raise HTTPException(
-            status_code=500, detail=f"Crew not ready: {state['error']}"
+            status_code=500,
+            detail=f"Crew not ready: {state['error']}"
         )
 
     crew = state["crew"]
     llm = state.get("llm")
 
-    # 1) Run the crew
-    raw_result = crew.kickoff({"topic": topic})
-    raw_text = raw_result if isinstance(raw_result, str) else str(raw_result)
-    raw_text = (raw_text or "").strip()
+    # -----------------------------------------------------
+    # 1) Run the crew and KEEP STRUCTURE
+    # -----------------------------------------------------
+    result = crew.kickoff({"topic": topic})
 
-    # 2) Wrap into tasks_output
-    tasks_output = [{"content": raw_text}]
+    # If the crew returned a string, wrap it
+    if isinstance(result, str):
+        result = {"summary": result}
 
-    # 3) Best-effort summary
-    summary = None
-    if llm:
-        prompt = (
-            "Summarize the following text (from a multi-agent research pipeline) "
-            "in exactly 5–7 bullet points.\nAvoid headings. Only bullet points.\n\n"
-            f"TEXT:\n{raw_text}\n"
-        )
+    # -----------------------------------------------------
+    # 2) Add a best-effort summary IF the agents did not provide one
+    # -----------------------------------------------------
+    summary = result.get("summary")
+    if not summary and llm:
         try:
-            summary = llm(prompt)
-            summary = summary if isinstance(summary, str) else str(summary)
+            prompt = (
+                "Summarize the following content from a multi-agent pipeline "
+                "in 5–7 bullet points.\nAvoid headings.\n\n"
+                f"TEXT:\n{json.dumps(result, ensure_ascii=False)}\n"
+            )
+            summary_text = llm(prompt)
+            if isinstance(summary_text, str) and summary_text.strip():
+                result["summary"] = summary_text.strip()
         except Exception:
-            summary = None
+            pass
 
-    if not summary or not summary.strip():
-        first_lines = [ln.strip() for ln in raw_text.splitlines() if ln.strip()]
-        summary = "\n".join([f"- {ln[:200]}" for ln in first_lines[:7]]) or "- (no summary)"
+    # Fallback if summary still missing
+    if "summary" not in result or not str(result["summary"]).strip():
+        try:
+            raw = json.dumps(result, ensure_ascii=False)
+            first_lines = [
+                f"- {ln.strip()[:200]}"
+                for ln in raw.splitlines()
+                if ln.strip()
+            ]
+            result["summary"] = "\n".join(first_lines[:7]) or "- (no summary)"
+        except Exception:
+            result["summary"] = "- (no summary)"
 
+    # -----------------------------------------------------
+    # 3) This is the FINAL structure used by PPT builder
+    # -----------------------------------------------------
     enriched = {
-        "summary": summary.strip(),
-        "tasks_output": tasks_output,
+        "topic": topic,
+        "result": result,
+        "tasks_output": [
+            {"content": json.dumps(result, ensure_ascii=False)}
+        ]
     }
 
+    # -----------------------------------------------------
     # 4) Persist output
+    # -----------------------------------------------------
     runs_dir = os.path.join(BASE, "runs")
     os.makedirs(runs_dir, exist_ok=True)
-
     outfile = os.path.join(runs_dir, "latest_output.json")
     tmpfile = outfile + ".tmp"
 
