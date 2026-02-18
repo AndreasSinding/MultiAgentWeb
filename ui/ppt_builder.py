@@ -404,16 +404,20 @@ def _merge_json_into(merged: Dict[str, Any], obj: Dict[str, Any]) -> None:
     if not isinstance(obj, dict):
         return
 
+    # research block first
     if isinstance(obj.get("research"), dict):
         _merge_research_block(merged, obj["research"])
 
+    # summary
     if "summary" in obj:
         s = _strip(obj.get("summary"))
         if len(s) > len(merged["summary"]):
             merged["summary"] = s
 
-    # ✅ CUSTOM handling for trends (avoid stringifying dicts)
+    # ✅ Custom handling for trends (avoid stringifying dicts)
     tr = obj.get("trends")
+    if isinstance(tr, dict):
+        tr = [tr]  # normalize a single trend object to a list
     if isinstance(tr, list):
         for t in tr:
             if isinstance(t, dict):
@@ -426,23 +430,15 @@ def _merge_json_into(merged: Dict[str, Any], obj: Dict[str, Any]) -> None:
                 if line:
                     merged["trends"].append(line)
             elif isinstance(t, str):
-                # keep only human-written strings, not dict literals
                 if not _looks_like_json_dict(t):
                     merged["trends"].append(_strip(t))
 
-    # ✅ keep generic merge ONLY for the simple list sections
+    # ✅ Keep generic merge for simple text sections only
     for key in ("insights", "opportunities", "risks", "sources"):
         for item in _coerce_list(obj.get(key)):
             s = _strip(item)
             if s:
                 merged[key].append(s)
-
-    #Remove old trends
-    #for key in ("trends", "insights", "opportunities", "risks", "sources"):
-    #    for item in _coerce_list(obj.get(key)):
-    #        s = _strip(item)
-    #        if s:
-    #            merged[key].append(s)
 
     # Map key_points (and synonyms) to insights + trends
     for k in ("key_points", "keypoints", "highlights"):
@@ -452,6 +448,7 @@ def _merge_json_into(merged: Dict[str, Any], obj: Dict[str, Any]) -> None:
                 merged["insights"].append(s)
                 merged["trends"].append(s)
 
+    # Competitors
     for comp in _coerce_list(obj.get("competitors")):
         if isinstance(comp, dict):
             merged["competitors"].append(
@@ -462,6 +459,7 @@ def _merge_json_into(merged: Dict[str, Any], obj: Dict[str, Any]) -> None:
                 }
             )
 
+    # Numbers
     for n in _coerce_list(obj.get("numbers")):
         if isinstance(n, dict):
             merged["numbers"].append(
@@ -472,6 +470,7 @@ def _merge_json_into(merged: Dict[str, Any], obj: Dict[str, Any]) -> None:
                 }
             )
 
+    # Recommendations
     for r in _coerce_list(obj.get("recommendations")):
         if isinstance(r, dict):
             merged["recommendations"].append(
