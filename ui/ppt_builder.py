@@ -92,6 +92,11 @@ def _parse_summary_kv_block(s: str) -> Optional[Dict[str, Any]]:
     if not isinstance(s, str):
         return None
     text = s.strip()
+    
+    # NEW: trim a leading bullet prefix if present
+    if text.startswith("- "):
+    text = text[2:].lstrip()
+    
     # Heuristic check
     if "summary=" not in text and "key_points" not in text and "recommendations" not in text:
         return None
@@ -396,6 +401,9 @@ def _merge_json_into(merged: Dict[str, Any], obj: Dict[str, Any]) -> None:
             if s:
                 merged[key].append(s)
 
+    # Map key_points and common synonyms into insights
+    #for k in ("key_points", "keypoints", "high
+
     for comp in _coerce_list(obj.get("competitors")):
         if isinstance(comp, dict):
             merged["competitors"].append(
@@ -565,8 +573,36 @@ def create_multislide_pptx(result: Dict[str, Any], topic: str, file_path: str):
             also_consider.extend(_collect_strings_deep(data)[:20])
 
         sections = _extract_all_json_blocks(tasks_output, also_consider)
+        sections = _extract_all_json_blocks(tasks_output, also_consider)
+
+        # NEW: merge the top-level structured dict (if present)
+        if isinstance(data, dict):
+            _merge_json_into(sections, data)
+        
+        # NEW: merge structured dicts inside tasks_output as-is
+        for blk in (tasks_output or []):
+            if isinstance(blk, dict):
+                _merge_json_into(sections, blk)
+                # and merge nested 'result' dicts some tools produce
+                inner = blk.get("result")
+                if isinstance(inner, dict):
+                    _merge_json_into(sections, inner)
+        
+        # Keep your existing fallback for summary
         if not sections["summary"]:
             sections["summary"] = _strip(data.get("summary")) or "No summary available."
+                if not sections["summary"]:
+                    sections["summary"] = _strip(data.get("summary")) or "No summary available."
+
+        
+        # After you created `data` and before creating slides:
+        if not topic or topic.strip().lower() == "string":
+            topic_guess = ""
+            if isinstance(result, dict):
+                topic_guess = _strip(result.get("topic", "")) or topic_guess
+            if isinstance(data, dict) and not topic_guess:
+                topic_guess = _strip(data.get("topic", ""))
+            topic = topic_guess or topic or ""
 
         # -------------------------------------------------------
         # Create PPT
