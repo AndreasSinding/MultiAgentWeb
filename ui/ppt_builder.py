@@ -1,31 +1,34 @@
-# ui/ppt_builder.py
 # -*- coding: utf-8 -*-
 """
-ppt_builder.py — Stable deck builder for CrewAI multi-agent output
+ppt_builder.py — Robust deck builder for CrewAI multi-agent output
 
-- Accepts the unified contract: create_multislide_pptx(result: dict, topic: str, file_path: str)
-- Extracts from structured JSON and from KV text blocks (summary="..." key_points=[...] etc.)
-- Supports EN/NO section headers and markdown-like outputs
+Key features:
+- Safely merges structured dicts from Research/Analysis/Summary steps
+- Extracts from JSON strings, fenced blocks, and light markdown
+- Filters out raw Python/JSON dict lines so they don't appear as bullets
+- Maps key_points -> insights and trends
+- Deduplicates bullets, tables, and sources
 """
 
 from __future__ import annotations
+import ast
 import json
 import re
 from typing import Any, Dict, List, Tuple, Optional
+
 from pptx import Presentation
 from pptx.util import Inches, Pt
 from pptx.enum.text import PP_ALIGN
 
 # --------------------------------------------------------------------
-# Simple, safe regex patterns
+# Simple regex patterns
 # --------------------------------------------------------------------
 BULLET = re.compile(r'^\s*[-*\u2022]\s+')  # basic bullet removal
-# fenced code block with optional "json" language tag
-FENCE = re.compile(r"```(?:json)?\s*(.*?)\s*```", flags=re.S | re.I)
+FENCE = re.compile(r"```(?:json)?\s*(.*?)\s*```", flags=re.S | re.I)  # fenced block
 URL_PATTERN = re.compile(r"(https?://[^\s)]+)")
 
 # --------------------------------------------------------------------
-# Safe Utilities
+# Utilities
 # --------------------------------------------------------------------
 def _strip(x: Any) -> str:
     if x is None:
@@ -43,100 +46,52 @@ def _safe_json_loads(s: str):
     except Exception as e:
         return None, e
 
-def _preclean_near_json(s: str) -> str:
-    if not isinstance(s, str):
-        return ""
-    s = s.strip()
-    # Remove fenced code blocks (handled separately by FENCE already)
-    s = FENCE.sub(lambda m: m.group(1), s)
-    # Remove basic bullets
-    lines = [BULLET.sub("", ln) for ln in s.splitlines()]
-    return "\n".join(lines).strip()
-
-def _collect_strings_deep(obj: Any, limit: int = 20_000) -> List[str]:
-    out = []
-    def walk(x):
-        if isinstance(x, str):
-            if x.strip():
-                out.append(x.strip())
-        elif isinstance(x, dict):
-            for v in x.values():
-                walk(v)
-        elif isinstance(x, list):
-            for v in x:
-                walk(v)
-    walk(obj)
-    seen, res, total = set(), [], 0
-    for s in out:
-        if s not in seen:
-            seen.add(s)
-            res.append(s)
-            total += len(s)
-            if total > limit:
-                break
-    return res
-
 def _drop_bullet(s: str) -> str:
     return BULLET.sub("", s or "").strip()
 
 def _find_urls(s: str) -> List[str]:
     return URL_PATTERN.findall(s or "")
 
-def _parse_summary_kv_block(s: str) -> Optional[Dict[str, Any]]:
+def _looks_like_json_dict(s: str) -> bool:
     """
-    Parse strings like:
-      summary="...", key_points=["..",".."], recommendations=['..', '..'], sources=[".."]
-    Returns dict with keys: summary, key_points, recommendations, sources (lists).
+    Returns True if s is a Python/JSON dict literal (e.g., "{'title': ...}")
+    We use ast.literal_eval to avoid code execution.
     """
     if not isinstance(s, str):
-        return None
-    text = s.strip()
-    # Trim a leading bullet prefix if present
-    if text.startswith("- "):
-        text = text[2:].lstrip()
+        return False
+    s = s.strip()
+    if not (s.startswith("{") and s.endswith("}")):
+        return False
+    try:
+        obj = ast.literal_eval(s)
+        return isinstance(obj, dict)
+    except Exception:
+        return False
 
-    # Heuristic check
-    if "summary=" not in text and "key_points" not in text and "recommendations" not in text:
-        return None
+def _dedupe_list_keep_order(items: List[str]) -> List[str]:
+    seen, out = set(), []
+    for it in items:
+        if not it:
+            continue
+        key = it.strip()
+        if key not in seen:
+            seen.add(key)
+            out.append(it)
+    return out
 
-    def _find_value(name: str) -> Optional[str]:
-        # summary=" ... "
-        m = re.search(rf'{name}\s*=\s*"(.+?)"', text, flags=re.S | re.I)
-        if m:
-            return m.group(1).strip()
-        # summary=' ... '
-        m = re.search(rf"{name}\s*=\s*'(.+?)'", text, flags=re.S | re.I)
-        if m:
-            return m.group(1).strip()
-        return None
+def _dedupe_dict_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    seen, out = set(), []
+    for r in rows:
+        # build a stable fingerprint across typical dict rows
+        key = tuple(sorted((k, _strip(v)) for k, v in r.items()))
+        if key not in seen:
+            seen.add(key)
+            out.append(r)
+    return out
 
-    def _find_list(name: str) -> List[str]:
-        # key_points=[ ... ] (allow single/double quotes; tolerate commas)
-        m = re.search(rf'{name}\s*=\s*\[(.+?)\]', text, flags=re.S | re.I)
-        if not m:
-            return []
-        body = m.group(1)
-        # naive split by comma; then strip quotes
-        parts = [p.strip() for p in body.split(",")]
-        cleaned = []
-        for p in parts:
-            p = p.strip()
-            if (p.startswith('"') and p.endswith('"')) or (p.startswith("'") and p.endswith("'")):
-                p = p[1:-1].strip()
-            if p:
-                cleaned.append(p)
-        return [x for x in cleaned if x]
-
-    parsed = {
-        "summary": _find_value("summary"),
-        "key_points": _find_list("key_points"),
-        "recommendations": _find_list("recommendations"),
-        "sources": _find_list("sources"),
-    }
-    if not (parsed["summary"] or parsed["key_points"] or parsed["recommendations"] or parsed["sources"]):
-        return None
-    return parsed
-
+# --------------------------------------------------------------------
+# Split helpers
+# --------------------------------------------------------------------
 def _split3(s: str) -> Tuple[str, str, str]:
     parts = [p.strip() for p in re.split(r"\s*[-–:;]\s*", s or "", maxsplit=2)]
     parts += ["", "", ""]
@@ -145,7 +100,6 @@ def _split3(s: str) -> Tuple[str, str, str]:
 def _split_recommendation(items: List[str]) -> Tuple[List[Optional[int]], List[str], List[str]]:
     prio, act, why = [], [], []
     for it in items:
-        # e.g., "[Prioritet 2] Action — Reason"
         m = re.match(r"^\[?\s*prioritet\s*(\d+)\s*\]?\s*(.+?)(?:\s*[–-]\s*(.+))?$", it, flags=re.I)
         if m:
             prio.append(int(m.group(1)))
@@ -159,7 +113,7 @@ def _split_recommendation(items: List[str]) -> Tuple[List[Optional[int]], List[s
     return prio, act, why
 
 # --------------------------------------------------------------------
-# Section Maps
+# Section maps (NO + EN)
 # --------------------------------------------------------------------
 SECTION_MAP_NO = {
     "sammendrag": "summary",
@@ -204,7 +158,52 @@ SECTION_KEYS = [
 ]
 
 # --------------------------------------------------------------------
-# Extract Outputs
+# Parse "summary=..., key_points=[...]" style strings
+# --------------------------------------------------------------------
+def _parse_summary_kv_block(s: str) -> Optional[Dict[str, Any]]:
+    if not isinstance(s, str):
+        return None
+    text = s.strip()
+    if text.startswith("- "):
+        text = text[2:].lstrip()
+    if "summary=" not in text and "key_points" not in text and "recommendations" not in text:
+        return None
+
+    def _find_value(name: str) -> Optional[str]:
+        m = re.search(rf'{name}\s*=\s*"(.+?)"', text, flags=re.S | re.I)
+        if m:
+            return m.group(1).strip()
+        m = re.search(rf"{name}\s*=\s*'(.+?)'", text, flags=re.S | re.I)
+        if m:
+            return m.group(1).strip()
+        return None
+
+    def _find_list(name: str) -> List[str]:
+        m = re.search(rf'{name}\s*=\s*\[(.+?)\]', text, flags=re.S | re.I)
+        if not m:
+            return []
+        body = m.group(1)
+        parts = [p.strip() for p in body.split(",")]
+        cleaned = []
+        for p in parts:
+            if (p.startswith('"') and p.endswith('"')) or (p.startswith("'") and p.endswith("'")):
+                p = p[1:-1].strip()
+            if p:
+                cleaned.append(p)
+        return [x for x in cleaned if x]
+
+    parsed = {
+        "summary": _find_value("summary"),
+        "key_points": _find_list("key_points"),
+        "recommendations": _find_list("recommendations"),
+        "sources": _find_list("sources"),
+    }
+    if not (parsed["summary"] or parsed["key_points"] or parsed["recommendations"] or parsed["sources"]):
+        return None
+    return parsed
+
+# --------------------------------------------------------------------
+# Extract outputs index
 # --------------------------------------------------------------------
 def _dig_outputs(result: Any):
     data = result
@@ -214,18 +213,18 @@ def _dig_outputs(result: Any):
     tasks_output = []
     if isinstance(data, dict):
         tasks_output = (
-            data.get("tasks_output")
-            or data.get("tasks")
-            or []
+            data.get("tasks_output") or
+            data.get("tasks") or
+            []
         )
 
-    # Include the final agent answer as a pseudo-task if present
+    # Include a final string-typed answer if present
     if isinstance(data, dict):
         final_answer = (
-            data.get("final_output")
-            or data.get("raw")
-            or data.get("text")
-            or data.get("content")
+            data.get("final_output") or
+            data.get("raw") or
+            data.get("text") or
+            data.get("content")
         )
         if isinstance(final_answer, str):
             tasks_output = tasks_output + [{"content": final_answer}]
@@ -234,6 +233,9 @@ def _dig_outputs(result: Any):
 
     return data, tasks_output
 
+# --------------------------------------------------------------------
+# JSON scanning in free text
+# --------------------------------------------------------------------
 def _brace_scan_json(text: str) -> List[Any]:
     objs, depth, start = [], 0, None
     for i, ch in enumerate(text):
@@ -253,7 +255,7 @@ def _brace_scan_json(text: str) -> List[Any]:
     return objs
 
 # --------------------------------------------------------------------
-# Markdown extraction (unified EN/NO)
+# Markdown extraction (filters dict-looking lines)
 # --------------------------------------------------------------------
 def _extract_from_markdown(merged: Dict[str, Any], s: str) -> None:
     lines = [ln.rstrip() for ln in (s or "").splitlines()]
@@ -267,39 +269,52 @@ def _extract_from_markdown(merged: Dict[str, Any], s: str) -> None:
     current = None
     buf: List[str] = []
 
+    def filtered_cleaned(buf: List[str]) -> List[str]:
+        base = [_drop_bullet(x) for x in buf]
+        # remove any raw dict-looking string lines
+        base = [x for x in base if not _looks_like_json_dict(x)]
+        # remove empties and heavy junk
+        base = [x for x in base if x]
+        return base
+
     def flush():
         nonlocal buf, current
         if not current or not buf:
             buf = []
             return
+        cleaned = filtered_cleaned(buf)
         key = current
-        cleaned = [_drop_bullet(x) for x in buf]
 
         if key in ("trends", "insights", "opportunities", "risks", "sources"):
-            merged[key].extend([x for x in cleaned if x])
+            merged[key].extend(cleaned)
+
         elif key == "competitors":
             for x in cleaned:
                 a, b, c = _split3(x)
                 merged["competitors"].append({"name": a, "position": b, "notes": c})
+
         elif key == "numbers":
             for x in cleaned:
                 a, b, c = _split3(x)
                 merged["numbers"].append({"metric": a, "value": b, "source": c})
+
         elif key == "recommendations":
             prio, act, why = _split_recommendation(cleaned)
             for i, (p, a, w) in enumerate(zip(prio, act, why), 1):
                 merged["recommendations"].append({"priority": p or i, "action": a, "rationale": w})
+
         elif key == "summary":
             text = " ".join(cleaned).strip()
             if len(text) > len(merged["summary"]):
                 merged["summary"] = text
+
         buf = []
 
     for raw in lines:
         ln = raw.strip()
         if not ln:
             continue
-        # Markdown heading like "# Executive Summary"
+        # Markdown header
         if ln.startswith("#"):
             h = ln.lstrip("# ").strip()
             canon = norm_header(h)
@@ -308,7 +323,7 @@ def _extract_from_markdown(merged: Dict[str, Any], s: str) -> None:
                 current = canon
                 buf = []
                 continue
-        # Plain line that is exactly a section header (e.g., "Risks:")
+        # Plain section header (e.g., "Risks:")
         h2 = ln.lower().rstrip(":")
         canon = norm_header(h2)
         if canon:
@@ -316,13 +331,13 @@ def _extract_from_markdown(merged: Dict[str, Any], s: str) -> None:
             current = canon
             buf = []
             continue
-        # Accumulate content lines for the current section
+        # Accumulate
         if current:
             buf.append(ln)
     flush()
 
 # --------------------------------------------------------------------
-# JSON Normalization / Merging
+# Merge helpers
 # --------------------------------------------------------------------
 def _merge_research_block(merged: Dict[str, Any], research: Dict[str, Any]):
     # Trends
@@ -333,6 +348,7 @@ def _merge_research_block(merged: Dict[str, Any], research: Dict[str, Any]):
                 title = _strip(t.get("title") or t.get("name"))
                 why = _strip(t.get("why_it_matters") or t.get("detail") or t.get("summary"))
                 ev = _strip(t.get("evidence"))
+                # readable line
                 line = f"{title} — {why}".strip(" —")
                 if ev:
                     line += f" (evidence: {ev})"
@@ -365,7 +381,7 @@ def _merge_research_block(merged: Dict[str, Any], research: Dict[str, Any]):
                     }
                 )
 
-    # Simple list sections
+    # Simple lists
     for k in ("insights", "opportunities", "risks", "sources"):
         for item in _coerce_list(research.get(k)):
             s = _strip(item)
@@ -388,24 +404,21 @@ def _merge_json_into(merged: Dict[str, Any], obj: Dict[str, Any]) -> None:
     if not isinstance(obj, dict):
         return
 
-    # research block
     if isinstance(obj.get("research"), dict):
         _merge_research_block(merged, obj["research"])
 
-    # summary
     if "summary" in obj:
         s = _strip(obj.get("summary"))
         if len(s) > len(merged["summary"]):
             merged["summary"] = s
 
-    # core list sections
     for key in ("trends", "insights", "opportunities", "risks", "sources"):
         for item in _coerce_list(obj.get(key)):
             s = _strip(item)
             if s:
                 merged[key].append(s)
 
-    # map key_points/keypoints/highlights → insights AND trends
+    # Map key_points (and synonyms) to insights + trends
     for k in ("key_points", "keypoints", "highlights"):
         for item in _coerce_list(obj.get(k)):
             s = _strip(item)
@@ -413,7 +426,6 @@ def _merge_json_into(merged: Dict[str, Any], obj: Dict[str, Any]) -> None:
                 merged["insights"].append(s)
                 merged["trends"].append(s)
 
-    # competitors
     for comp in _coerce_list(obj.get("competitors")):
         if isinstance(comp, dict):
             merged["competitors"].append(
@@ -424,7 +436,6 @@ def _merge_json_into(merged: Dict[str, Any], obj: Dict[str, Any]) -> None:
                 }
             )
 
-    # numbers
     for n in _coerce_list(obj.get("numbers")):
         if isinstance(n, dict):
             merged["numbers"].append(
@@ -435,7 +446,6 @@ def _merge_json_into(merged: Dict[str, Any], obj: Dict[str, Any]) -> None:
                 }
             )
 
-    # recommendations
     for r in _coerce_list(obj.get("recommendations")):
         if isinstance(r, dict):
             merged["recommendations"].append(
@@ -447,13 +457,13 @@ def _merge_json_into(merged: Dict[str, Any], obj: Dict[str, Any]) -> None:
             )
 
 # --------------------------------------------------------------------
-# Main JSON/Markdown Extractor
+# Main JSON/Markdown extractor
 # --------------------------------------------------------------------
 def _extract_all_json_blocks(tasks_output, also_consider=None):
     merged = {k: ([] if k != "summary" else "") for k in SECTION_KEYS}
     candidates = []
 
-    # Collect candidate strings
+    # collect candidate strings
     for blk in tasks_output or []:
         if isinstance(blk, dict):
             for key in ("raw", "content", "text", "final_output", "result", "output", "message"):
@@ -461,9 +471,32 @@ def _extract_all_json_blocks(tasks_output, also_consider=None):
                 if isinstance(s, str) and s.strip():
                     candidates.append(s)
                 elif isinstance(s, (dict, list)):
+                    # collect strings deeply
+                    def _collect_strings_deep(obj: Any, limit: int = 20000) -> List[str]:
+                        out = []
+                        def walk(x):
+                            if isinstance(x, str):
+                                if x.strip():
+                                    out.append(x.strip())
+                            elif isinstance(x, dict):
+                                for v in x.values():
+                                    walk(v)
+                            elif isinstance(x, list):
+                                for v in x:
+                                    walk(v)
+                        walk(obj)
+                        seen, res, total = set(), [], 0
+                        for s2 in out:
+                            if s2 not in seen:
+                                seen.add(s2)
+                                res.append(s2)
+                                total += len(s2)
+                                if total > limit:
+                                    break
+                        return res
                     candidates.extend(_collect_strings_deep(s))
 
-        # artifacts—optional (if your agents attach them)
+        # artifacts (optional)
         if isinstance(blk, dict) and isinstance(blk.get("artifacts"), list):
             for a in blk["artifacts"]:
                 if isinstance(a, dict):
@@ -472,18 +505,65 @@ def _extract_all_json_blocks(tasks_output, also_consider=None):
                         if isinstance(v, str):
                             candidates.append(v)
                         elif isinstance(v, (dict, list)):
-                            candidates.extend(_collect_strings_deep(v))
+                            # same deep collection
+                            def _collect_strings_deep2(obj: Any, limit: int = 20000) -> List[str]:
+                                out = []
+                                def walk(x):
+                                    if isinstance(x, str):
+                                        if x.strip():
+                                            out.append(x.strip())
+                                    elif isinstance(x, dict):
+                                        for v in x.values():
+                                            walk(v)
+                                    elif isinstance(x, list):
+                                        for v in x:
+                                            walk(v)
+                                walk(obj)
+                                seen, res, total = set(), [], 0
+                                for s2 in out:
+                                    if s2 not in seen:
+                                        seen.add(s2)
+                                        res.append(s2)
+                                        total += len(s2)
+                                        if total > limit:
+                                            break
+                                return res
+                            candidates.extend(_collect_strings_deep2(v))
 
     for extra in (also_consider or []):
         if isinstance(extra, str):
             candidates.append(extra)
         elif isinstance(extra, (dict, list)):
-            candidates.extend(_collect_strings_deep(extra))
+            # collect strings deep (reuse)
+            def _collect_strings_deep3(obj: Any, limit: int = 20000) -> List[str]:
+                out = []
+                def walk(x):
+                    if isinstance(x, str):
+                        if x.strip():
+                            out.append(x.strip())
+                    elif isinstance(x, dict):
+                        for v in x.values():
+                            walk(v)
+                    elif isinstance(x, list):
+                        for v in x:
+                            walk(v)
+                walk(obj)
+                seen, res, total = set(), [], 0
+                for s2 in out:
+                    if s2 not in seen:
+                        seen.add(s2)
+                        res.append(s2)
+                        total += len(s2)
+                        if total > limit:
+                            break
+                return res
+            candidates.extend(_collect_strings_deep3(extra))
 
     # Fenced JSON blocks
     for s in list(candidates):
         for block in FENCE.findall(s):
-            cleaned = _preclean_near_json(block)
+            cleaned = block.strip()
+            # scan brace blocks
             for obj in _brace_scan_json(cleaned):
                 _merge_json_into(merged, obj)
             obj, _ = _safe_json_loads(cleaned)
@@ -494,14 +574,14 @@ def _extract_all_json_blocks(tasks_output, also_consider=None):
     for s in list(candidates):
         ss = s.strip()
         if (ss.startswith("{") and ss.endswith("}")) or (ss.startswith("[") and ss.endswith("]")):
-            obj, _ = _safe_json_loads(_preclean_near_json(ss))
+            obj, _ = _safe_json_loads(ss)
             if obj:
                 _merge_json_into(merged, obj)
             continue
         for obj in _brace_scan_json(ss):
             _merge_json_into(merged, obj)
 
-    # Parse "summary=..., key_points=[...], recommendations=[...], sources=[...]"
+    # Parse "summary=..., key_points=[...]" style
     for s in list(candidates):
         kv = _parse_summary_kv_block(s)
         if kv:
@@ -518,11 +598,11 @@ def _extract_all_json_blocks(tasks_output, also_consider=None):
                 if u:
                     merged["sources"].append(u)
 
-    # Markdown extraction as last resort
+    # Markdown fallback (with dict-line filter)
     for s in candidates:
         _extract_from_markdown(merged, s)
 
-    # URLs → sources (from all candidates)
+    # URLs from all candidates → sources
     for u in _find_urls("\n".join(candidates)):
         merged["sources"].append(u)
 
@@ -536,9 +616,14 @@ def _add_bullet_slide(prs, title, bullets, size=18):
     slide.shapes.title.text = title
     tf = slide.placeholders[1].text_frame
     tf.clear()
+
+    # Deduplicate & filter empties
+    bullets = _dedupe_list_keep_order([_strip(b) for b in bullets or []])
+
     if not bullets:
         tf.text = "No data available."
         return
+
     for i, line in enumerate(bullets):
         p = tf.paragraphs[0] if i == 0 else tf.add_paragraph()
         p.text = str(line)
@@ -548,6 +633,10 @@ def _add_bullet_slide(prs, title, bullets, size=18):
 def _add_table_slide(prs, title, headers, rows):
     slide = prs.slides.add_slide(prs.slide_layouts[5])  # Title Only
     slide.shapes.title.text = title
+
+    # Deduplicate rows
+    rows = _dedupe_dict_rows(rows or [])
+
     left, top, width, height = Inches(0.6), Inches(1.6), Inches(9.0), Inches(1.0)
     n_rows = max(2, 1 + len(rows))
     n_cols = len(headers)
@@ -566,7 +655,7 @@ def _add_table_slide(prs, title, headers, rows):
     if rows:
         for i, r in enumerate(rows[: n_rows - 1], 1):
             for j in range(n_cols):
-                table.cell(i, j).text = str(r[j]) if j < len(r) else ""
+                table.cell(i, j).text = str(r.get(headers[j].lower(), r.get(headers[j], "")))
     else:
         table.cell(1, 0).text = "No structured data available."
 
@@ -575,12 +664,12 @@ def _add_table_slide(prs, title, headers, rows):
 # --------------------------------------------------------------------
 def create_multislide_pptx(result: Dict[str, Any], topic: str, file_path: str):
     """
-    Safe PPT builder.
-    Returns file_path on success.
-    Returns {"error": "..."} on failure, never raises.
+    Returns file_path on success; returns {"error": "..."} on failure.
     """
     try:
-        # -------------------- Extract data --------------------
+        # -------------------------------------------------------
+        # Extract data
+        # -------------------------------------------------------
         data, tasks_output = _dig_outputs(result)
         also_consider = []
         if isinstance(data, dict):
@@ -588,11 +677,34 @@ def create_multislide_pptx(result: Dict[str, Any], topic: str, file_path: str):
                 v = data.get(k)
                 if isinstance(v, str) and v.strip():
                     also_consider.append(v)
+            # scan for more candidate strings
+            def _collect_strings_deep(obj: Any, limit: int = 20000) -> List[str]:
+                out = []
+                def walk(x):
+                    if isinstance(x, str):
+                        if x.strip():
+                            out.append(x.strip())
+                    elif isinstance(x, dict):
+                        for v in x.values():
+                            walk(v)
+                    elif isinstance(x, list):
+                        for v in x:
+                            walk(v)
+                walk(obj)
+                seen, res, total = set(), [], 0
+                for s2 in out:
+                    if s2 not in seen:
+                        seen.add(s2)
+                        res.append(s2)
+                        total += len(s2)
+                        if total > limit:
+                            break
+                return res
             also_consider.extend(_collect_strings_deep(data)[:50])
 
         sections = _extract_all_json_blocks(tasks_output, also_consider)
 
-        # Merge the top-level structured dict(s) explicitly
+        # Merge structured dicts directly
         if isinstance(data, dict):
             _merge_json_into(sections, data)
         for blk in (tasks_output or []):
@@ -602,9 +714,11 @@ def create_multislide_pptx(result: Dict[str, Any], topic: str, file_path: str):
                 if isinstance(inner, dict):
                     _merge_json_into(sections, inner)
 
-        # Fallback summary
+        # Ensure summary fallback
         if not sections["summary"]:
-            sections["summary"] = _strip(data.get("summary")) or "No summary available."
+            sections["summary"] = _strip(data.get("summary")) if isinstance(data, dict) else ""
+            if not sections["summary"]:
+                sections["summary"] = "No summary available."
 
         # Repair/derive topic if caller passed a bogus one
         if not topic or topic.strip().lower() == "string":
@@ -615,7 +729,31 @@ def create_multislide_pptx(result: Dict[str, Any], topic: str, file_path: str):
                 topic_guess = _strip(data.get("topic", ""))
             topic = topic_guess or topic or "Market Insights Report"
 
-        # -------------------- Create PPT --------------------
+        # Deduplicate final sections
+        for k in ("trends", "insights", "opportunities", "risks", "sources"):
+            sections[k] = _dedupe_list_keep_order([_strip(x) for x in sections[k]])
+
+        sections["competitors"] = _dedupe_dict_rows(sections["competitors"])
+        sections["numbers"]     = _dedupe_dict_rows(sections["numbers"])
+
+        # Recommendations as list of strings
+        rec_lines = []
+        for r in sections["recommendations"]:
+            if not isinstance(r, dict):
+                # accept "action" only if passed as string
+                rec_lines.append(_strip(str(r)))
+                continue
+            pr = r.get("priority")
+            prefix = f"{pr}) " if isinstance(pr, int) else ""
+            action = _strip(r.get("action"))
+            rationale = _strip(r.get("rationale"))
+            rec_lines.append(f"{prefix}{action} — Why: {rationale}".strip(" —"))
+
+        rec_lines = _dedupe_list_keep_order(rec_lines)
+
+        # -------------------------------------------------------
+        # Create PPT
+        # -------------------------------------------------------
         prs = Presentation()
 
         # Title slide
@@ -638,32 +776,28 @@ def create_multislide_pptx(result: Dict[str, Any], topic: str, file_path: str):
         _add_bullet_slide(prs, "Risks", sections["risks"])
 
         comp_rows = [
-            [_strip(c.get("name")), _strip(c.get("position")), _strip(c.get("notes"))]
+            {"name": _strip(c.get("name")), "position": _strip(c.get("position")), "notes": _strip(c.get("notes"))}
             for c in sections["competitors"]
         ]
         _add_table_slide(prs, "Competitors / Actors", ["Name", "Position", "Notes"], comp_rows)
 
         num_rows = [
-            [_strip(n.get("metric")), _strip(n.get("value")), _strip(n.get("source"))]
+            {"metric": _strip(n.get("metric")), "value": _strip(n.get("value")), "source": _strip(n.get("source"))}
             for n in sections["numbers"]
         ]
         _add_table_slide(prs, "Key Numbers", ["Metric", "Value", "Source"], num_rows)
 
-        rec_lines = []
-        for r in sections["recommendations"]:
-            pr = r.get("priority")
-            prefix = f"{pr}) " if isinstance(pr, int) else ""
-            rec_lines.append(f"{prefix}{_strip(r.get('action'))} — Why: {_strip(r.get('rationale'))}")
         _add_bullet_slide(prs, "Recommendations", rec_lines)
-
         _add_bullet_slide(prs, "Sources", sections["sources"], size=16)
 
-        # -------------------- Save PPT --------------------
+        # -------------------------------------------------------
+        # Save
+        # -------------------------------------------------------
         try:
             prs.save(file_path)
         except Exception as e:
-            print("ERROR: Failed to save PPT file:", repr(e))
             import traceback
+            print("ERROR: Failed to save PPT file:", repr(e))
             traceback.print_exc()
             return {
                 "error": "ppt_build_failed",
@@ -672,9 +806,8 @@ def create_multislide_pptx(result: Dict[str, Any], topic: str, file_path: str):
         return file_path
 
     except Exception as e:
-        # Catch ANY unexpected builder exception
-        print("ERROR inside create_multislide_pptx:", repr(e))
         import traceback
+        print("ERROR inside create_multislide_pptx:", repr(e))
         traceback.print_exc()
         return {
             "error": "ppt_build_failed",
