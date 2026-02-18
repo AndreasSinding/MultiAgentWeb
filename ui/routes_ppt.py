@@ -1,21 +1,14 @@
+# ui/routes_ppt.py
 # -*- coding: utf-8 -*-
 """
-Safe PPT routes for FastAPI.
+PPT routes for FastAPI.
 
-- Import-safe: no heavy imports at module scope.
-- Binary responses use StreamingResponse (no response_model).
-- Work is offloaded to a threadpool (python-pptx is CPU-bound and file I/O).
-- Filenames are sanitized; temporary files are cleaned up.
-
-Mount in main.py (behind an env flag):
-    ENABLE_PPT_ROUTES = os.getenv("ENABLE_PPT_ROUTES", "0") == "1"
-    if ENABLE_PPT_ROUTES:
-        from ui.routes_ppt import router as ppt_router
-        app.include_router(ppt_router)
+- StreamingResponse for binary download (no response_model).
+- Threadpool offload for python-pptx + file I/O.
+- Filenames are sanitized; temp files are cleaned up.
 """
 
 from __future__ import annotations
-
 import io
 import json
 import os
@@ -31,9 +24,7 @@ from starlette.responses import StreamingResponse
 
 router = APIRouter(prefix="/ppt", tags=["ppt"])
 
-
 # ----------------------------- Models -----------------------------
-
 class BuildPptRequest(BaseModel):
     """Payload expected from your multi-agent pipeline output."""
     topic: str = Field(..., min_length=1, max_length=300, description="Report topic/title")
@@ -52,27 +43,21 @@ class BuildPptRequest(BaseModel):
         except Exception:
             return 0
 
-
 # ----------------------------- Helpers -----------------------------
-
-_SAFE_NAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
-
+_SAFE_NAME_RE = re.compile(r"[^A-Za-z0-9.\_-]+")
 
 def _safe_filename(name: Optional[str]) -> str:
     base = (name or "report").strip().strip("._")
     base = _SAFE_NAME_RE.sub("_", base) or "report"
-    return base[:120]  # keep it OS/zip-safe
-
+    return base[:120]  # OS/zip-safe
 
 def _build_ppt_to_bytes(topic: str, result: Dict[str, Any], desired_name: Optional[str]) -> bytes:
     """
     Work function executed in a threadpool:
-      - lazy-imports python-pptx and your builder
-      - writes to a temp file
-      - returns the file bytes
-      - cleans up temp files/dir
+    - lazy-imports python-pptx and your builder
+    - writes to a temp file, returns its bytes, and cleans up
     """
-    # Lazy import (so module import does not pull python-pptx)
+    # Lazy import to avoid heavy deps at import-time
     from ui.ppt_builder import create_multislide_pptx
 
     tmpdir = tempfile.mkdtemp(prefix="pptx_")
@@ -99,13 +84,10 @@ def _build_ppt_to_bytes(topic: str, result: Dict[str, Any], desired_name: Option
         except Exception:
             pass
 
-
 # ----------------------------- Routes -----------------------------
-
 @router.get("/ping", summary="Lightweight PPT router health")
 def ping() -> Dict[str, str]:
     return {"ok": "ppt-router-alive"}
-
 
 @router.post(
     "/build",
@@ -117,28 +99,25 @@ def ping() -> Dict[str, str]:
     ),
 )
 async def build_ppt(req: BuildPptRequest):
-    # Optional payload size guard (tune thresholds for your scenario)
+    # Optional payload size guard
     if req.approx_size_bytes and req.approx_size_bytes > 5 * 1024 * 1024:
         raise HTTPException(status_code=413, detail="Payload too large for PPT build")
 
-    # Run CPU/file-bound work outside the event loop
+    # CPU/file-bound work off the event loop
     try:
         blob: bytes = await run_in_threadpool(_build_ppt_to_bytes, req.topic, req.result, req.filename)
     except HTTPException:
         raise
     except Exception as e:
-        # Avoid leaking internal details; keep it concise
         raise HTTPException(status_code=500, detail=f"PPT build failed: {e}")
 
-    # Compose a user-facing filename (safe and capped)
+    # Compose a user-facing filename
     download_name = _safe_filename(req.filename or req.topic) + ".pptx"
-
     return StreamingResponse(
         io.BytesIO(blob),
         media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
         headers={
             "Content-Disposition": f'attachment; filename="{download_name}"',
-            # Optional: add cache headers if you want browser caching behavior
             "Cache-Control": "no-store",
         },
     )
