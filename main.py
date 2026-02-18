@@ -140,6 +140,11 @@ def run(req: RunRequest):
     try:
         output = run_crew_pipeline(req.topic)
 
+        # unified structure for PPT pipeline + latest endpoint
+        packaged = {
+            "topic": req.topic,
+            "result": output   # full crew output dict
+
         # Also persist output here (pipeline already does it)
         try:
             runs_dir = os.path.join(BASE, "runs")
@@ -152,12 +157,13 @@ def run(req: RunRequest):
         except Exception as _e:
             print("WARNING: Could not persist latest_output.json from /run:", _e)
 
-        return {"topic": req.topic, "result": output}
+        return packaged
 
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
 
 # ------------------------------------------------------------------------------
 # Latest saved output
