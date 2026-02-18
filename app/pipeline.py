@@ -221,39 +221,95 @@ def ensure_keys():
 #-------------------------------------------------------------------
 # Helper for normalizing into dict
 #-------------------------------------------------------------------
-def normalize_crew_output(output):
+def normalize_crew_output(output: Any) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
     """
-    Takes a CrewOutput or a dict or a string and normalizes it into a dict.
+    Normalizes your CrewAI output into a flat dict containing:
+    summary, key_points, insights, opportunities, risks, trends,
+    competitors, numbers, recommendations, sources
+    plus a list of per-task dictionaries.
     """
-    # Case 1: Already a dict
-    if isinstance(output, dict):
-        return output
 
-    # Case 2: CrewOutput-like object (has attributes)
-    if hasattr(output, "pydantic_output"):
-        pod = output.pydantic_output
-        if isinstance(pod, dict):
-            return pod
+    merged = {
+        "summary": "",
+        "key_points": [],
+        "insights": [],
+        "opportunities": [],
+        "risks": [],
+        "trends": [],
+        "competitors": [],
+        "numbers": [],
+        "recommendations": [],
+        "sources": [],
+    }
 
-    if hasattr(output, "raw_output"):
-        # Try to parse the raw_output as JSON
-        raw = output.raw_output
-        if isinstance(raw, str):
-            try:
-                return json.loads(raw)
-            except Exception:
-                # fallback to wrapping string
-                return {"summary": raw}
+    task_dicts: List[Dict[str, Any]] = []
 
-    # Case 3: String fallback
-    if isinstance(output, str):
+    # Helper to merge dicts into merged structure
+    def merge_piece(d: Dict[str, Any]):
+        if not isinstance(d, dict):
+            return
+
+        if "summary" in d and isinstance(d["summary"], str):
+            if len(d["summary"]) > len(merged["summary"]):
+                merged["summary"] = d["summary"]
+
+        for key in ["key_points", "insights", "opportunities", "risks", "sources"]:
+            if key in d and isinstance(d[key], list):
+                merged[key].extend([x for x in d[key] if isinstance(x, str)])
+
+        for key in ["trends", "competitors", "numbers", "recommendations"]:
+            if key in d and isinstance(d[key], list):
+                for item in d[key]:
+                    if isinstance(item, dict):
+                        merged[key].append(item)
+
+    # Step 1 — Top-level pydantic object (summary output)
+    if hasattr(output, "pydantic") and output.pydantic is not None:
         try:
-            return json.loads(output)
-        except Exception:
-            return {"summary": output}
+            top = output.pydantic.model_dump()
+            merge_piece(top)
+        except Exception as e:
+            print("NORMALIZER WARNING: top-level pydantic failed", e)
 
-    # Last resort
-    return {"summary": str(output)}
+    # Step 2 — Top-level raw JSON
+    if hasattr(output, "raw") and isinstance(output.raw, str):
+        try:
+            obj = json.loads(output.raw)
+            merge_piece(obj)
+        except Exception:
+            pass
+
+    # Step 3 — Tasks
+    if hasattr(output, "tasks_output"):
+        for t in output.tasks_output:
+
+            # Attempt pydantic first
+            td = None
+            if hasattr(t, "pydantic") and t.pydantic is not None:
+                try:
+                    td = t.pydantic.model_dump()
+                except Exception as e:
+                    print("NORMALIZER WARNING: task pydantic failed", e)
+
+            # Fall back to raw JSON
+            if td is None and hasattr(t, "raw") and isinstance(t.raw, str):
+                try:
+                    td = json.loads(t.raw)
+                except Exception:
+                    td = None
+
+            if isinstance(td, dict):
+                merge_piece(td)
+                task_dicts.append(td)
+
+    # Ensure summary fallback
+    if not merged["summary"]:
+        merged["summary"] = "- (no summary)"
+
+    print("NORMALIZER RESULT KEYS:", list(merged.keys()))
+    print("NORMALIZER COUNTS:", {k: len(v) if isinstance(v, list) else "(string)" for k,v in merged.items()})
+
+    return merged, task_dicts
     
 # ---------------------------------------------------------------------
 # PIPELINE EXECUTION
