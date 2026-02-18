@@ -21,8 +21,7 @@ LLM_YAML_PATH = os.getenv("LLM_YAML_PATH", "config/llm.yaml")
 # Shared state
 CREW_STATE: Dict[str, Any] = {"ready": False, "error": None, "crew": None, "llm": None}
 
-import json
-from typing import Any, Dict, List, Tuple
+#New function for dict 18.02.2026
 
 def _safe_to_dict(obj: Any) -> Dict[str, Any]:
     """
@@ -270,67 +269,22 @@ def run_crew_pipeline(topic: str) -> Dict[str, Any]:
         )
 
     crew = state["crew"]
-    llm = state.get("llm")
 
-    # -------------------------------------------------
-    # 1) Run crew and normalize output safely
-    # -------------------------------------------------
+    # 1) Run the crew (returns a CrewOutput model in your setup)
     raw_output = crew.kickoff({"topic": topic})
-    
-    print("DEBUG CREW OUTPUT DIR:", dir(raw_output))
-    print("DEBUG CREW OUTPUT:", raw_output)
-    print("DEBUG CREW OUTPUT __dict__:", getattr(raw_output, "__dict__", None))
 
-    result = normalize_crew_output(raw_output)
+    # 2) Normalize to a single dict and collect per-task dicts
+    result, task_dicts = normalize_crew_output(raw_output)
 
-    # -------------------------------------------------
-    # 2) Ensure summary exists
-    # -------------------------------------------------
-    if not isinstance(result, dict):
-        result = {"summary": str(result)}
-
-    if "summary" not in result or not result["summary"]:
-        # Use LLM summary fallback
-        if llm:
-            try:
-                prompt = (
-                    "Summarize the following content from a multi-agent pipeline "
-                    "in 5–7 bullet points. Avoid headings.\n\n"
-                    f"TEXT:\n{json.dumps(result, ensure_ascii=False)}\n"
-                )
-                summary_text = llm(prompt)
-                if isinstance(summary_text, str) and summary_text.strip():
-                    result["summary"] = summary_text.strip()
-            except Exception:
-                pass
-
-        # Final fallback summary
-        if "summary" not in result or not result["summary"]:
-            try:
-                raw = json.dumps(result, ensure_ascii=False)
-                lines = [
-                    f"- {ln.strip()[:200]}"
-                    for ln in raw.splitlines()
-                    if ln.strip()
-                ]
-                result["summary"] = "\n".join(lines[:7]) or "- (no summary)"
-            except Exception:
-                result["summary"] = "- (no summary)"
-
-    # -------------------------------------------------
-    # 3) Final enriched structure for /run and PPT builder
-    # -------------------------------------------------
+    # 3) Build the final envelope expected by routes and ppt_builder
     enriched = {
         "topic": topic,
         "result": result,
-        "tasks_output": [
-            {"content": json.dumps(result, ensure_ascii=False)}
-        ]
+        # Keep tasks_output as JSON strings (not required for PPT, but handy for debugging)
+        "tasks_output": [{"content": json.dumps(td, ensure_ascii=False)} for td in task_dicts]
     }
 
-    # -------------------------------------------------
-    # 4) Persist to /latest
-    # -------------------------------------------------
+    # 4) Persist unified shape for /latest
     runs_dir = os.path.join(BASE, "runs")
     os.makedirs(runs_dir, exist_ok=True)
 
@@ -340,5 +294,12 @@ def run_crew_pipeline(topic: str) -> Dict[str, Any]:
     with open(tmpfile, "w", encoding="utf-8") as f:
         json.dump(enriched, f, ensure_ascii=False, indent=2)
     os.replace(tmpfile, outfile)
+
+    # Optional: also persist just the normalized result for quick inspection
+    try:
+        with open(os.path.join(runs_dir, "normalized_result.json"), "w", encoding="utf-8") as f:
+            json.dump(result, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
 
     return enriched
