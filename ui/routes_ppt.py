@@ -63,11 +63,19 @@ def _build_ppt_to_bytes(topic: str, result: Dict[str, Any], desired_name: Option
     "/from-latest",
     response_class=StreamingResponse,
     summary="Build a PPTX automatically from the latest saved run",
-    description="Loads /runs/latest_output.json and generates a PPTX without requiring a POST body."
+    description="Loads /runs/latest_output.json (written by /run) and generates a PPTX."
 )
 async def ppt_from_latest():
-    # IMPORTANT: match main.py's BASE (folder where main.py lives)
-    latest_path = os.path.join(os.path.dirname(__file__), "runs/latest_output.json")
+    import os, json
+
+    # The PPT router lives under <APP_ROOT>/ui, while /run writes to <APP_ROOT>/runs.
+    # So we must go one directory up (parent of ui) to reach the same BASE as main.py.
+    app_root = os.path.dirname(os.path.dirname(__file__))   # <APP_ROOT>
+    latest_path = os.path.join(app_root, "runs", "latest_output.json")
+
+    # (Optional) helpful logging in App Service Log Stream:
+    print("[/ppt/from-latest] app_root:", app_root)
+    print("[/ppt/from-latest] latest_path:", latest_path, "exists:", os.path.exists(latest_path))
 
     if not os.path.exists(latest_path):
         raise HTTPException(status_code=404, detail="No latest_output.json found")
@@ -75,10 +83,10 @@ async def ppt_from_latest():
     with open(latest_path, "r", encoding="utf-8") as f:
         data = json.load(f)
 
-    topic = data.get("topic", "Untitled Report")
+    topic  = data.get("topic", "Untitled Report")
     result = data.get("result", {})
 
-    blob = await run_in_threadpool(_build_ppt_to_bytes, topic, result, topic)
+    blob: bytes = await run_in_threadpool(_build_ppt_to_bytes, topic, result, topic)
     download_name = _safe_filename(topic) + ".pptx"
 
     return StreamingResponse(
