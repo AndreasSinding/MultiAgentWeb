@@ -84,7 +84,43 @@ def ensure_keys():
             detail=f"Missing environment variables: {', '.join(missing)}",
         )
 
+#-------------------------------------------------------------------
+# Helper for normalizing into dict
+#-------------------------------------------------------------------
+def normalize_crew_output(output):
+    """
+    Takes a CrewOutput or a dict or a string and normalizes it into a dict.
+    """
+    # Case 1: Already a dict
+    if isinstance(output, dict):
+        return output
 
+    # Case 2: CrewOutput-like object (has attributes)
+    if hasattr(output, "pydantic_output"):
+        pod = output.pydantic_output
+        if isinstance(pod, dict):
+            return pod
+
+    if hasattr(output, "raw_output"):
+        # Try to parse the raw_output as JSON
+        raw = output.raw_output
+        if isinstance(raw, str):
+            try:
+                return json.loads(raw)
+            except Exception:
+                # fallback to wrapping string
+                return {"summary": raw}
+
+    # Case 3: String fallback
+    if isinstance(output, str):
+        try:
+            return json.loads(output)
+        except Exception:
+            return {"summary": output}
+
+    # Last resort
+    return {"summary": str(output)}
+    
 # ---------------------------------------------------------------------
 # PIPELINE EXECUTION
 # ---------------------------------------------------------------------
@@ -101,48 +137,50 @@ def run_crew_pipeline(topic: str) -> Dict[str, Any]:
     crew = state["crew"]
     llm = state.get("llm")
 
-    # -----------------------------------------------------
-    # 1) Run the crew and KEEP STRUCTURE
-    # -----------------------------------------------------
-    result = crew.kickoff({"topic": topic})
+    # -------------------------------------------------
+    # 1) Run crew and normalize output safely
+    # -------------------------------------------------
+    raw_output = crew.kickoff({"topic": topic})
 
-    # If the crew returned a string, wrap it
-    if isinstance(result, str):
-        result = {"summary": result}
+    result = normalize_crew_output(raw_output)
 
-    # -----------------------------------------------------
-    # 2) Add a best-effort summary IF the agents did not provide one
-    # -----------------------------------------------------
-    summary = result.get("summary")
-    if not summary and llm:
-        try:
-            prompt = (
-                "Summarize the following content from a multi-agent pipeline "
-                "in 5–7 bullet points.\nAvoid headings.\n\n"
-                f"TEXT:\n{json.dumps(result, ensure_ascii=False)}\n"
-            )
-            summary_text = llm(prompt)
-            if isinstance(summary_text, str) and summary_text.strip():
-                result["summary"] = summary_text.strip()
-        except Exception:
-            pass
+    # -------------------------------------------------
+    # 2) Ensure summary exists
+    # -------------------------------------------------
+    if not isinstance(result, dict):
+        result = {"summary": str(result)}
 
-    # Fallback if summary still missing
-    if "summary" not in result or not str(result["summary"]).strip():
-        try:
-            raw = json.dumps(result, ensure_ascii=False)
-            first_lines = [
-                f"- {ln.strip()[:200]}"
-                for ln in raw.splitlines()
-                if ln.strip()
-            ]
-            result["summary"] = "\n".join(first_lines[:7]) or "- (no summary)"
-        except Exception:
-            result["summary"] = "- (no summary)"
+    if "summary" not in result or not result["summary"]:
+        # Use LLM summary fallback
+        if llm:
+            try:
+                prompt = (
+                    "Summarize the following content from a multi-agent pipeline "
+                    "in 5–7 bullet points. Avoid headings.\n\n"
+                    f"TEXT:\n{json.dumps(result, ensure_ascii=False)}\n"
+                )
+                summary_text = llm(prompt)
+                if isinstance(summary_text, str) and summary_text.strip():
+                    result["summary"] = summary_text.strip()
+            except Exception:
+                pass
 
-    # -----------------------------------------------------
-    # 3) This is the FINAL structure used by PPT builder
-    # -----------------------------------------------------
+        # Final fallback summary
+        if "summary" not in result or not result["summary"]:
+            try:
+                raw = json.dumps(result, ensure_ascii=False)
+                lines = [
+                    f"- {ln.strip()[:200]}"
+                    for ln in raw.splitlines()
+                    if ln.strip()
+                ]
+                result["summary"] = "\n".join(lines[:7]) or "- (no summary)"
+            except Exception:
+                result["summary"] = "- (no summary)"
+
+    # -------------------------------------------------
+    # 3) Final enriched structure for /run and PPT builder
+    # -------------------------------------------------
     enriched = {
         "topic": topic,
         "result": result,
@@ -151,11 +189,12 @@ def run_crew_pipeline(topic: str) -> Dict[str, Any]:
         ]
     }
 
-    # -----------------------------------------------------
-    # 4) Persist output
-    # -----------------------------------------------------
+    # -------------------------------------------------
+    # 4) Persist to /latest
+    # -------------------------------------------------
     runs_dir = os.path.join(BASE, "runs")
     os.makedirs(runs_dir, exist_ok=True)
+
     outfile = os.path.join(runs_dir, "latest_output.json")
     tmpfile = outfile + ".tmp"
 
