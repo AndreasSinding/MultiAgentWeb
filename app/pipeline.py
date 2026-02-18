@@ -326,59 +326,49 @@ def run_crew_pipeline(topic: str) -> Dict[str, Any]:
 
     crew = state["crew"]
 
-    # 1) Run the crew (returns a CrewOutput model in your setup)
-    result, task_dicts = normalize_crew_output(raw_output)
-    raw_output = crew.kickoff({"topic": topic})
+    # -------------------------------------------------
+    # 1) Run the crew — ALWAYS define raw_output
+    # -------------------------------------------------
+    try:
+        raw_output = crew.kickoff({"topic": topic})
+    except Exception as e:
+        # Even if kickoff fails, do NOT reference raw_output
+        raise HTTPException(
+            status_code=500,
+            detail=f"Crew execution failed: {type(e).__name__}: {e}"
+        )
 
-    # 2) Normalize to a single dict and collect per-task dicts (defensive unpack)
+    # -------------------------------------------------
+    # 2) Normalize crew output
+    # -------------------------------------------------
     norm = normalize_crew_output(raw_output)
+
     if isinstance(norm, tuple) and len(norm) == 2:
         result, task_dicts = norm
     else:
-        # Fallback if an old normalize_crew_output returns only a dict
         result = norm if isinstance(norm, dict) else {"summary": str(norm)}
         task_dicts = []
 
-    # 3) Ensure there is at least a summary
-    summary = result.get("summary")
-    if not summary or not str(summary).strip():
-        # Try to salvage from raw_output.raw if present
-        try:
-            if hasattr(raw_output, "raw") and isinstance(raw_output.raw, str) and raw_output.raw.strip():
-                result["summary"] = json.loads(raw_output.raw).get("summary", raw_output.raw.strip())
-        except Exception:
-            pass
-        if not result.get("summary"):
-            # final fallback
-            try:
-                raw = json.dumps(result, ensure_ascii=False)
-                lines = [f"- {ln.strip()[:200]}" for ln in raw.splitlines() if ln.strip()]
-                result["summary"] = "\n".join(lines[:7]) or "- (no summary)"
-            except Exception:
-                result["summary"] = "- (no summary)"
+    # -------------------------------------------------
+    # 3) Guarantee summary exists
+    # -------------------------------------------------
+    if not result.get("summary"):
+        result["summary"] = "- (no summary)"
 
-    # 4) Build final envelope for /latest and PPT builder
+    # -------------------------------------------------
+    # 4) Construct final output for API + PPT builder
+    # -------------------------------------------------
     enriched = {
         "topic": topic,
         "result": result,
-        "tasks_output": [{"content": json.dumps(td, ensure_ascii=False)} for td in task_dicts]
+        "tasks_output": [
+            {"content": json.dumps(td, ensure_ascii=False)} for td in task_dicts
+        ],
     }
 
-    # DEBUG: log what we’re about to save (short + counts)
-    try:
-        print("DEBUG MERGED KEYS:", list(result.keys()))
-        for k in ["summary","key_points","insights","opportunities","risks","trends","competitors","numbers","recommendations","sources"]:
-            v = result.get(k)
-            if isinstance(v, list):
-                print(f"DEBUG {k}: {len(v)} items")
-            elif isinstance(v, str):
-                print(f"DEBUG {k}: {len(v)} chars")
-            else:
-                print(f"DEBUG {k}: {type(v).__name__}")
-    except Exception:
-        pass
-
-    # 5) Persist unified shape for /latest
+    # -------------------------------------------------
+    # 5) Persist latest result
+    # -------------------------------------------------
     runs_dir = os.path.join(BASE, "runs")
     os.makedirs(runs_dir, exist_ok=True)
     outfile = os.path.join(runs_dir, "latest_output.json")
@@ -387,12 +377,5 @@ def run_crew_pipeline(topic: str) -> Dict[str, Any]:
     with open(tmpfile, "w", encoding="utf-8") as f:
         json.dump(enriched, f, ensure_ascii=False, indent=2)
     os.replace(tmpfile, outfile)
-
-    # Optional: also persist just the normalized result for inspection
-    try:
-        with open(os.path.join(runs_dir, "normalized_result.json"), "w", encoding="utf-8") as f:
-            json.dump(result, f, ensure_ascii=False, indent=2)
-    except Exception:
-        pass
 
     return enriched
