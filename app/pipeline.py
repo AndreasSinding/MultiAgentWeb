@@ -327,7 +327,7 @@ def run_crew_pipeline(topic: str) -> Dict[str, Any]:
     crew = state["crew"]
 
     # 1) Run the crew (returns a CrewOutput model in your setup)
-    raw_output = crew.kickoff({"topic": topic})
+    result, task_dicts = normalize_crew_output(raw_output)
 
     # 2) Normalize to a single dict and collect per-task dicts (defensive unpack)
     norm = normalize_crew_output(raw_output)
