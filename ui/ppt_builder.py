@@ -83,6 +83,60 @@ def _drop_bullet(s: str) -> str:
 def _find_urls(s: str) -> List[str]:
     return URL_PATTERN.findall(s or "")
 
+def _parse_summary_kv_block(s: str) -> Optional[Dict[str, Any]]:
+    """
+    Parse strings like:
+      summary="...", key_points=["..",".."], recommendations=['..', '..'], sources=[".."]
+    Returns dict with keys: summary, key_points, recommendations, sources (lists).
+    """
+    if not isinstance(s, str):
+        return None
+    text = s.strip()
+    # Heuristic check
+    if "summary=" not in text and "key_points" not in text and "recommendations" not in text:
+        return None
+
+    def _find_value(name: str) -> Optional[str]:
+        # summary=" ... " (greedy across newlines)
+        m = re.search(rf'{name}\s*=\s*"(.*?)"', text, flags=re.S | re.I)
+        if m:
+            return m.group(1).strip()
+        # summary=' ... '
+        m = re.search(rf"{name}\s*=\s*'(.*?)'", text, flags=re.S | re.I)
+        if m:
+            return m.group(1).strip()
+        return None
+
+    def _find_list(name: str) -> List[str]:
+        # key_points=[ ... ]  (allow single/double quotes; tolerate commas)
+        m = re.search(rf'{name}\s*=\s*\[(.*?)\]', text, flags=re.S | re.I)
+        if not m:
+            return []
+        body = m.group(1)
+        # split by comma, strip whitespace + quotes
+        parts = [p.strip() for p in body.split(",")]
+        cleaned = []
+        for p in parts:
+            # remove surrounding quotes if present
+            p = p.strip()
+            if (p.startswith('"') and p.endswith('"')) or (p.startswith("'") and p.endswith("'")):
+                p = p[1:-1].strip()
+            if p:
+                cleaned.append(p)
+        return [x for x in cleaned if x]
+
+    parsed = {
+        "summary": _find_value("summary"),
+        "key_points": _find_list("key_points"),
+        "recommendations": _find_list("recommendations"),
+        "sources": _find_list("sources"),
+    }
+
+    # At least one value must be present
+    if not (parsed["summary"] or parsed["key_points"] or parsed["recommendations"] or parsed["sources"]):
+        return None
+    return parsed
+
 def _split3(s: str) -> Tuple[str, str, str]:
     parts = [p.strip() for p in re.split(r"\s*[-–:;]\s*", s or "", maxsplit=2)]
     parts += ["", "", ""]
@@ -413,6 +467,25 @@ def _extract_all_json_blocks(tasks_output, also_consider=None):
             continue
         for obj in _brace_scan_json(ss):
             _merge_json_into(merged, obj)
+
+    # Try to parse "summary=..., key_points=[...], recommendations=[...], sources=[...]"
+    for s in list(candidates):
+        kv = _parse_summary_kv_block(s)
+        if kv:
+            if kv.get("summary") and len(kv["summary"]) > len(merged["summary"]):
+                merged["summary"] = kv["summary"]
+            for p in kv.get("key_points", []):
+                if p:
+                    # map key_points to 'insights' (or 'trends' if you prefer)
+                    merged["insights"].append(p)
+            for rec in kv.get("recommendations", []):
+                if rec:
+                    merged["recommendations"].append(
+                        {"priority": None, "action": rec, "rationale": ""}
+                    )
+            for u in kv.get("sources", []):
+                if u:
+                    merged["sources"].append(u)
 
     # Markdown extraction as last resort
     for s in candidates:
