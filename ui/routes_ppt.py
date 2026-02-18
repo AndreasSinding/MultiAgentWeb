@@ -89,6 +89,49 @@ def _build_ppt_to_bytes(topic: str, result: Dict[str, Any], desired_name: Option
 def ping() -> Dict[str, str]:
     return {"ok": "ppt-router-alive"}
 
+@router.get(
+    "/from-latest",
+    response_class=StreamingResponse,
+    summary="Build a PPTX automatically from the latest saved run",
+    description="Loads /runs/latest_output.json and generates a PPTX without requiring a POST body."
+)
+async def ppt_from_latest():
+    import os
+    import json
+    from starlette.responses import StreamingResponse
+    from starlette.concurrency import run_in_threadpool
+
+    # Path to latest_output.json
+    base = os.path.dirname(os.path.dirname(__file__))  # adjust if needed
+    latest_path = os.path.join(base, "runs/latest_output.json")
+
+    # Ensure file exists
+    if not os.path.exists(latest_path):
+        raise HTTPException(status_code=404, detail="No latest_output.json found")
+
+    # Load the latest output
+    with open(latest_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    topic = data.get("topic", "Untitled Report")
+    result = data.get("result", {})
+
+    # Build the PPT using the same internal code as /ppt/build
+    blob: bytes = await run_in_threadpool(
+        _build_ppt_to_bytes, topic, result, topic
+    )
+
+    download_name = _safe_filename(topic) + ".pptx"
+
+    return StreamingResponse(
+        io.BytesIO(blob),
+        media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        headers={
+            "Content-Disposition": f'attachment; filename="{download_name}"',
+            "Cache-Control": "no-store",
+        },
+    )
+
 @router.post(
     "/build",
     response_class=StreamingResponse,
