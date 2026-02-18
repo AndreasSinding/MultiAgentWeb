@@ -141,6 +141,19 @@ async def ppt_from_latest():
         "Returns a binary stream with the correct PPTX content type and a safe download filename."
     ),
 )
+
+@router.get("/ping", include_in_schema=False)  # <— hidden from Swagger
+def ping() -> Dict[str, str]:
+    return {"ok": "ppt-router-alive"}
+
+@router.post(
+    "/build",
+    response_class=StreamingResponse,
+    summary="Build a PPTX from a multi-agent result",
+    description="...",
+    include_in_schema=False,                     # <— hidden from Swagger
+)
+
 async def build_ppt(req: BuildPptRequest):
     # Optional payload size guard
     if req.approx_size_bytes and req.approx_size_bytes > 5 * 1024 * 1024:
